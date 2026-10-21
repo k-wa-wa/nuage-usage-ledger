@@ -1,0 +1,9 @@
+[
+  {
+    "dsn": "NUAGE.USAGE.JCLLIB",
+    "unit": "3380",
+    "volser": "PUB000",
+    "space": "(TRK,(15,15,20))",
+    "dcb": "(DSORG=PO,RECFM=FB,LRECL=80,BLKSIZE=3120)"
+  }
+]
