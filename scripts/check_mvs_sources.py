@@ -6,6 +6,7 @@
 - ./ と $$ で始まる行は書けない (mvs-config の IEBUPDTE が制御文・終端とみなす)
 - ZTIMER の予定行は決まった桁位置に書く (時刻は 10 桁目、コマンドは 24 桁目から)
 - RAKF の権限の行は決まった桁位置に書く (対象は 9 桁目、権限は 61 桁目から)
+- ビルドジョブ (build/) は JOB 文で始まり、MSGCLASS=A である (nuage-cluster の mvsctl が終了を判定する)
 """
 
 import json
@@ -31,8 +32,18 @@ def check_lines(path, lines):
 
 def main(out):
     out = Path(out)
-    for path in sorted((out / "members").glob("*/*")):
+    for path in sorted((out / "members").glob("*/*")) + sorted((out / "build").glob("*")):
         check_lines(path.relative_to(out), path.read_text(encoding="latin-1").splitlines())
+    for path in sorted((out / "build").glob("*")):
+        lines = path.read_text(encoding="latin-1").splitlines()
+        # JOB 文と、その継続行 (72 桁目までの末尾が , の行の次)
+        card = lines[0]
+        for line in lines[1:]:
+            if not card.rstrip().endswith(","):
+                break
+            card += line
+        if not re.match(r"//[A-Z@#$][A-Z0-9@#$]{0,7} +JOB ", card) or "MSGCLASS=A" not in card:
+            errors.append(f"{path.relative_to(out)}: ビルドジョブは JOB 文で始め、MSGCLASS=A にする")
 
     schedule = (out / "schedule").read_text(encoding="latin-1").splitlines()
     check_lines("schedule", schedule)

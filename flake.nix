@@ -1,5 +1,5 @@
 {
-  description = "クラスタ使用量の日次帳票 (MVS 3.8j のバッチジョブ)";
+  description = "クラスタ使用量の勘定 (MVS 3.8j のバッチジョブと KICKS のオンライン照会)";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -21,10 +21,12 @@
       #   schedule                              ZTIMER の予定表 (SYS2.CONTROL(ZTIMER)) に足す行
       #   rakf                                  RAKF の権限表 (SYS1.SECURE.CNTL(PROFILES)) に足す行
       #   datasets.json                         無ければ作るデータセット
+      #   build/<ジョブ名>                       内容が変わったら流すビルドジョブ (KICKS の導入の後。RC 4 まで成功)
       #   cicerone3270/                         3270 端末の案内 (cicerone3270) に足す辞書
       packages = forAllSystems (pkgs: {
         default = pkgs.runCommandLocal "nuage-usage-ledger-mvs" { } ''
-          mkdir -p $out/members/NUAGE.USAGE.JCLLIB $out/members/NUAGE.USAGE.CNTL
+          mkdir -p $out/members/NUAGE.USAGE.JCLLIB $out/members/NUAGE.USAGE.CNTL \
+            $out/members/NUAGE.USAGE.CLIST $out/build
           # Git では JCL・REXX・COBOL を別々に持ち、ここで 1 本のジョブにまとめる
           substitute ${./mvs/USAGERPT.jcl} $out/members/NUAGE.USAGE.JCLLIB/USAGERPT \
             --replace-fail '{{USAGEGET}}' "$(cat ${./mvs/USAGEGET.rexx})" \
@@ -33,6 +35,21 @@
             --replace-fail '{{USAGEGET}}' "$(cat ${./mvs/USAGEGET.rexx})" \
             --replace-fail '{{TRANGEN}}' "$(cat ${./mvs/TRANGEN.cbl})" \
             --replace-fail '{{POSTING}}' "$(cat ${./mvs/POSTING.cbl})"
+          substitute ${./mvs/LEDGINQ.jcl} $out/members/NUAGE.USAGE.JCLLIB/LEDGINQ \
+            --replace-fail '{{INQBLD}}' "$(cat ${./mvs/INQBLD.cbl})"
+          # オンライン (KICKS): 表・マップ・プログラムを 1 本のビルドジョブにまとめる。
+          # nuage-cluster が内容の変化を見て流す (build/)。手で流せるよう JCLLIB にも置く
+          substitute ${./mvs/online/LEDGBLD.jcl} $out/build/LEDGBLD \
+            --replace-fail '{{KIKSITLG}}' "$(cat ${./mvs/online/KIKSITLG.asm})" \
+            --replace-fail '{{KIKPCTLG}}' "$(cat ${./mvs/online/KIKPCTLG.asm})" \
+            --replace-fail '{{KIKPPTLG}}' "$(cat ${./mvs/online/KIKPPTLG.asm})" \
+            --replace-fail '{{KIKFCTLG}}' "$(cat ${./mvs/online/KIKFCTLG.asm})" \
+            --replace-fail '{{LBALSET}}' "$(cat ${./mvs/online/LBALSET.bms})" \
+            --replace-fail '{{LLSTSET}}' "$(cat ${./mvs/online/LLSTSET.bms})" \
+            --replace-fail '{{LBALPGM}}' "$(cat ${./mvs/online/LBALPGM.cbl})" \
+            --replace-fail '{{LLSTPGM}}' "$(cat ${./mvs/online/LLSTPGM.cbl})"
+          cp $out/build/LEDGBLD $out/members/NUAGE.USAGE.JCLLIB/LEDGBLD
+          cp ${./mvs/online/LEDGER.clist} $out/members/NUAGE.USAGE.CLIST/LEDGER
           # マスタ (換算表・勘定マスタ定義) は Git で宣言する
           cp ${./mvs/cntl/RATES} $out/members/NUAGE.USAGE.CNTL/RATES
           cp ${./mvs/cntl/ACCTDEF} $out/members/NUAGE.USAGE.CNTL/ACCTDEF
