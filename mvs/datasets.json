@@ -60,5 +60,45 @@
     "volser": "PUB000",
     "space": "(TRK,(1,1))",
     "dcb": "(RECFM=FB,LRECL=80,BLKSIZE=800)"
+  },
+  {
+    "dsn": "NUAGE.USAGE.CLIST",
+    "type": "PO",
+    "unit": "3380",
+    "volser": "PUB000",
+    "space": "(TRK,(1,1,5))",
+    "dcb": "(DSORG=PO,RECFM=FB,LRECL=80,BLKSIZE=3120)"
+  },
+  {
+    "dsn": "NUAGE.USAGE.KICKS.V1R5M0.SKIKLOAD",
+    "type": "PO",
+    "unit": "3380",
+    "volser": "PUB000",
+    "space": "(TRK,(5,5,10))",
+    "dcb": "(DSORG=PO,RECFM=U,BLKSIZE=6144)"
+  },
+  {
+    "dsn": "NUAGE.USAGE.KICKS.V1R5M0.KIKRPL",
+    "type": "PO",
+    "unit": "3380",
+    "volser": "PUB000",
+    "space": "(TRK,(15,15,10))",
+    "dcb": "(DSORG=PO,RECFM=U,BLKSIZE=6144)"
+  },
+  {
+    "dsn": "NUAGE.USAGE.KICKS.V1R5M0.COBCOPY",
+    "type": "PO",
+    "unit": "3380",
+    "volser": "PUB000",
+    "space": "(TRK,(5,5,10))",
+    "dcb": "(DSORG=PO,RECFM=FB,LRECL=80,BLKSIZE=3120)"
+  },
+  {
+    "dsn": "NUAGE.USAGE.KICKS.V1R5M0.GCCCOPY",
+    "type": "PO",
+    "unit": "3380",
+    "volser": "PUB000",
+    "space": "(TRK,(5,5,10))",
+    "dcb": "(DSORG=PO,RECFM=VB,LRECL=80,BLKSIZE=3120)"
   }
 ]

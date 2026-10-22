@@ -2,7 +2,7 @@
 
 おうちクラスタ (nuage) の資源使用量を、メインフレーム (MVS 3.8j on Hercules) が勘定として記帳・残高管理する
 システム。毎朝、前日の使用量を換算単位 RU に換算して元帳に記帳し、昔ながらの帳票 (1403 ラインプリンタ形式) に印字する。
-課金はしない。
+勘定の残高と仕訳は、KICKS (CICS 互換) の 3270 画面で照会できる。課金はしない。
 
 設計は [docs/design.md](./docs/design.md) を参照する。**勘定系の作法 (業務日付・締め・元帳の世代管理・複式の仕訳・試算表など) を、
 この規模には過剰と承知のうえで意図的に真似る**のが方針である。
@@ -26,6 +26,14 @@
  │   POSTING  COBOL: 旧元帳(0) + 取引 → 新元帳(+1)、試算表で検証       │
  │   COMMIT        : 全ステップ正常のときだけ新世代と業務日付を確定    │
  │   → 未登録リスト・勘定残高明細・超過通知・試算表を帳票プリンタへ   │
+ │   ONLINE        : LEDGINQ を内部リーダで投入                       │
+ │                                                                   │
+ │ LEDGINQ (照会用ファイルの作成)                                     │
+ │   勘定マスタ(0) と仕訳の全世代 → 照会用の VSAM (KSDS)              │
+ │                                                                   │
+ │ TSO + KICKS (オンライン照会。照会専用)                             │
+ │   EXEC 'NUAGE.USAGE.CLIST(LEDGER)'                                │
+ │   LLST 勘定一覧 / LBAL 勘定照会 (残高と仕訳)                       │
  └───────────────────────────────────────────────────────────────────┘
    印字された帳票は、nuage-cluster のプリンタ役が PDF にする
 ```
@@ -41,10 +49,16 @@
 | `mvs/POSTING.cbl` | 記帳 (元帳の更新・仕訳・総勘定元帳・検証・帳票) |
 | `mvs/cntl/RATES` | 換算表マスタ (`NUAGE.USAGE.CNTL(RATES)`) |
 | `mvs/cntl/ACCTDEF` | 勘定マスタ定義 (`NUAGE.USAGE.CNTL(ACCTDEF)`)。勘定の追加・割当額の変更はここで行う |
+| `mvs/LEDGINQ.jcl` / `mvs/INQBLD.cbl` | 照会用ファイルの作成 (締めの後に LEDGER が投入する) |
+| `mvs/online/LLSTPGM.cbl` / `LLSTSET.bms` | オンラインの勘定一覧 (トランザクション LLST) のプログラムと画面 (BMS マップ) |
+| `mvs/online/LBALPGM.cbl` / `LBALSET.bms` | オンラインの勘定照会 (トランザクション LBAL) のプログラムと画面 |
+| `mvs/online/KIK*LG.asm` | KICKS の表 (SIT・PCT・PPT・FCT。接尾辞 LG) |
+| `mvs/online/LEDGBLD.jcl` | オンラインのビルドジョブ。`{{...}}` に表・マップ・プログラムが差し込まれる |
+| `mvs/online/LEDGER.clist` | オンラインを始める CLIST (`NUAGE.USAGE.CLIST(LEDGER)`) |
 | `mvs/schedule` | ZTIMER の予定表 (`SYS2.CONTROL(ZTIMER)`) に足す行 |
 | `mvs/rakf` | RAKF の権限表 (`SYS1.SECURE.CNTL(PROFILES)`) に足す行。`NUAGE.USAGE.*` への書き込みを許す |
-| `mvs/datasets.json` | このアプリが使うデータセット (無ければ作られる。PO / PS / GDG) |
-| `guide/ledger.toml` | 3270 端末の案内 [cicerone3270](https://github.com/k-wa-wa/cicerone3270) に足す辞書。データセットの説明と、勘定マスタ・仕訳・総勘定元帳・業務日付のレコード定義 (ブラウズ画面で項目名と値を出す) |
+| `mvs/datasets.json` | このアプリが使うデータセット (無ければ作られる。PO / PS / GDG。照会用の VSAM は LEDGINQ が作る) |
+| `guide/ledger.toml` | 3270 端末の案内 [cicerone3270](https://github.com/k-wa-wa/cicerone3270) に足す辞書。オンラインの画面 (LLST・LBAL) の説明、データセットの説明と、勘定マスタ・仕訳・総勘定元帳・業務日付・照会用ファイルのレコード定義 (ブラウズ画面で項目名と値を出す) |
 | `flake.nix` | 上をまとめて、nuage-cluster に渡す資材を作る |
 | `scripts/check_mvs_sources.py` | カード (80 桁) と MVS の制約の検査 (`nix flake check`) |
 
@@ -57,7 +71,11 @@ members/<データセット名>/<メンバー名>   MVS に書き込むメンバ
 schedule                               ZTIMER の予定表の末尾に足す行
 rakf                                   RAKF の権限表に足す行
 datasets.json                          無ければ作るデータセット
+build/<ジョブ名>                        内容が変わったら流すビルドジョブ (オンラインの LEDGBLD)
+cicerone3270/                          3270 端末の案内に足す辞書
 ```
+
+KICKS の導入と、ビルドジョブを流すのは nuage-cluster の mvs-config が行う。
 
 nuage-cluster は flake input としてこのリポジトリを取り込む。変更を反映するには、
 nuage-cluster 側で `nix flake update nuage-usage-ledger --flake ./nix` を実行して master に入れる。
@@ -73,6 +91,44 @@ ssh mainframe "mvs-console \"/S RUNJOB,M=USAGERPT,L='NUAGE.USAGE.JCLLIB'\""
 ssh mainframe "ls /run/mainframe-printer/"
 scp mainframe:/run/mainframe-printer/LEDGER-2026-10-21.pdf .
 ```
+
+### オンライン照会 (KICKS)
+
+```
+ssh -t mainframe ci3270        # TSO にログオンし、READY で次を打つ
+EXEC 'NUAGE.USAGE.CLIST(LEDGER)'
+```
+
+KICKS が始まり、勘定一覧 (LLST) が出る。勘定の前に S を打って Enter で勘定照会 (LBAL) へ進む。
+PF3 で終え、CLEAR で消した画面に `LLST` / `LBAL` を打てば再開、`KSSF` で KICKS を終えて TSO に戻る。
+
+```
+ LLST    NUAGE USAGE LEDGER  ACCOUNT LIST             AS OF CLOSING 2026-10-20
+ S ACCOUNT NO   CLASS  NAME                         BALANCE (RU)  ST
+   100-0000005  K8S    KUBE-SYSTEM                        18,220  A
+   ...
+
+ LBAL    NUAGE USAGE LEDGER  ACCOUNT INQUIRY          AS OF CLOSING 2026-10-20
+ ACCOUNT NO. ===> 100-0000005
+ CLASS         K8S     NAME  KUBE-SYSTEM
+ BALANCE                18,220 RU
+ ALLOCATED              24,800 RU      USED              6,580 RU
+ OPENED        2026-10-18    LAST POSTED  2026-10-21   STATUS  A  DEFINED
+ DATE        SEQ    TYPE          DR/CR          AMOUNT (RU)      BALANCE (RU)
+ 2026-10-21  000030 USAGE         2100/4100           -1,470            18,220
+ 2026-10-21  000005 USAGE         2100/4100           -1,470            19,690
+   ...
+ 2026-10-18  000026 USAGE         2100/4100           -1,536            10,864
+ 2026-10-18  000025 OPEN ALLOC    1100/2100           12,400            12,400
+```
+
+仕訳の行の残高は、その仕訳の後の残高である (勘定マスタの残高から新しい順にさかのぼって計算する)。
+
+- 照会専用である。元帳は締めだけが更新し、照会用ファイルはその写し (照会基準日 = 最終締め日)
+- 締めの後の LEDGINQ は、KICKS で照会中の利用者がいると失敗する。サインオフ (KSSF) してから流し直す
+  (`ssh mainframe "mvs-console \"/S RUNJOB,M=LEDGINQ,L='NUAGE.USAGE.JCLLIB'\""`)
+
+### 締めとマスタの保守
 
 - 締めが失敗したとき: 業務日付は進んでいないので、原因を直して同じジョブを流し直せばよい
 - 勘定を足す: `mvs/cntl/ACCTDEF` に次の番号で行を足す (番号順を保つ)。次の締めで開設され、週次割当額が 1 回分記帳される
@@ -156,6 +212,6 @@ scp mainframe:/run/mainframe-printer/LEDGER-2026-10-21.pdf .
 | :-- | :-- |
 | CI | GitHub Actions で MVS/CE の Docker イメージを立ち上げ、固定データでジョブを流して COND CODE と帳票を検証する |
 | 帳票 | 勘定元帳 (勘定ごとの取引明細)、週次・月次の推移 |
-| オンライン | KICKS (CICS 互換) の 3270 画面で残高照会、勘定間の割当の振替 |
+| オンライン | 勘定間の割当の振替 (オンラインの更新。照会は実装済み) |
 | HOST 区分の対象 | mainframe と swfs-cluster が `external-nodes` に入っていない (nuage-monitoring-stack 側で足す) |
 | 権限 | バッチ専用の利用者を作り、既定の利用者への ALTER の許可をやめる |
