@@ -19,15 +19,24 @@
       # nuage-cluster の mvs-config が MVS に書き込む資材。出力の形は次のとおりで、これが両者の約束事である。
       #   members/<データセット名>/<メンバー名>  書き込むメンバー
       #   schedule                              ZTIMER の予定表 (SYS2.CONTROL(ZTIMER)) に足す行
+      #   rakf                                  RAKF の権限表 (SYS1.SECURE.CNTL(PROFILES)) に足す行
       #   datasets.json                         無ければ作るデータセット
       packages = forAllSystems (pkgs: {
-        default = pkgs.runCommandLocal "nuage-usage-report-mvs" { } ''
-          mkdir -p $out/members/NUAGE.USAGE.JCLLIB
+        default = pkgs.runCommandLocal "nuage-usage-ledger-mvs" { } ''
+          mkdir -p $out/members/NUAGE.USAGE.JCLLIB $out/members/NUAGE.USAGE.CNTL
           # Git では JCL・REXX・COBOL を別々に持ち、ここで 1 本のジョブにまとめる
           substitute ${./mvs/USAGERPT.jcl} $out/members/NUAGE.USAGE.JCLLIB/USAGERPT \
             --replace-fail '{{USAGEGET}}' "$(cat ${./mvs/USAGEGET.rexx})" \
             --replace-fail '{{USAGERPT}}' "$(cat ${./mvs/USAGERPT.cbl})"
+          substitute ${./mvs/LEDGER.jcl} $out/members/NUAGE.USAGE.JCLLIB/LEDGER \
+            --replace-fail '{{USAGEGET}}' "$(cat ${./mvs/USAGEGET.rexx})" \
+            --replace-fail '{{TRANGEN}}' "$(cat ${./mvs/TRANGEN.cbl})" \
+            --replace-fail '{{POSTING}}' "$(cat ${./mvs/POSTING.cbl})"
+          # マスタ (換算表・勘定マスタ定義) は Git で宣言する
+          cp ${./mvs/cntl/RATES} $out/members/NUAGE.USAGE.CNTL/RATES
+          cp ${./mvs/cntl/ACCTDEF} $out/members/NUAGE.USAGE.CNTL/ACCTDEF
           cp ${./mvs/schedule} $out/schedule
+          cp ${./mvs/rakf} $out/rakf
           cp ${./mvs/datasets.json} $out/datasets.json
         '';
       });

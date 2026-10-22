@@ -3,8 +3,10 @@
       *****************************************************************
       * NUAGE CLUSTER DAILY RESOURCE USAGE REPORT                     *
       *                                                               *
-      * INPUT : CTLCARD  - USAGE DATE AND RUN DATE (1 CARD)           *
-      *         USAGE    - USAGE RECORDS, SORTED BY CLASS AND NAME    *
+      * INPUT : CTLCARD  - RUN RECORD (RUN DATE, USAGE DATE) FROM     *
+      *                    USAGEGET. DAY RECORDS ARE IGNORED.         *
+      *         USAGE    - USAGE RECORDS OF ONE DAY, SORTED BY CLASS  *
+      *                    AND NAME                                   *
       * OUTPUT: REPORT   - 132 COLUMN PRINTER REPORT (SYSOUT=M)       *
       *                                                               *
       * A SUBTOTAL IS PRINTED WHEN THE CLASS CHANGES (CONTROL BREAK). *
@@ -25,23 +27,26 @@
            RECORD CONTAINS 80 CHARACTERS
            DATA RECORD IS CTL-REC.
        01  CTL-REC.
-           05  CTL-USAGE-DATE      PIC X(10).
+           05  CTL-TAG             PIC X(3).
            05  FILLER              PIC X.
            05  CTL-RUN-DATE        PIC X(10).
-           05  FILLER              PIC X(59).
+           05  FILLER              PIC X.
+           05  CTL-USAGE-DATE      PIC X(10).
+           05  FILLER              PIC X(55).
        FD  USAGE-FILE
            LABEL RECORDS ARE STANDARD
            BLOCK CONTAINS 10 RECORDS
            RECORD CONTAINS 80 CHARACTERS
            DATA RECORD IS USAGE-REC.
        01  USAGE-REC.
+           05  U-DATE              PIC X(8).
            05  U-CLASS             PIC X(5).
            05  U-NAME              PIC X(24).
            05  U-CPU               PIC 9(7)V99.
            05  U-MEM               PIC 9(7)V99.
            05  U-NET               PIC 9(7)V99.
            05  U-STOR              PIC 9(7)V99.
-           05  FILLER              PIC X(15).
+           05  FILLER              PIC X(7).
        FD  REPORT-FILE
            LABEL RECORDS ARE OMITTED
            RECORD CONTAINS 133 CHARACTERS

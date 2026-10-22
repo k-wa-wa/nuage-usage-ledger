@@ -5,6 +5,7 @@
 - JCL の行 (// で始まる) は 71 桁まで (72 桁目は継続記号)
 - ./ と $$ で始まる行は書けない (mvs-config の IEBUPDTE が制御文・終端とみなす)
 - ZTIMER の予定行は決まった桁位置に書く (時刻は 10 桁目、コマンドは 24 桁目から)
+- RAKF の権限の行は決まった桁位置に書く (対象は 9 桁目、権限は 61 桁目から)
 """
 
 import json
@@ -50,6 +51,14 @@ def main(out):
         )
         if not ok:
             errors.append(f"schedule:{i}: ZTIMER の書式 (日付 1-8 桁, 時刻 10-14 桁, 種別 16-18 桁, 内容 24 桁目から) に合わない")
+
+    # RAKF: CLASS (8) + ENTITY (44) + GROUP (8) + ACCESS
+    if (out / "rakf").exists():
+        rakf = (out / "rakf").read_text(encoding="latin-1").splitlines()
+        check_lines("rakf", rakf)
+        for i, line in enumerate(rakf, 1):
+            if line[0:8].rstrip() not in ("DATASET", "FACILITY", "DASDVOL", "TAPEVOL", "TERMINAL") or line[60:].strip() not in ("NONE", "READ", "UPDATE", "ALTER"):
+                errors.append(f"rakf:{i}: RAKF の書式 (クラス 1-8 桁, 対象 9-52 桁, グループ 53-60 桁, 権限 61 桁目から) に合わない")
 
     for ds in json.loads((out / "datasets.json").read_text()):
         missing = {"dsn", "unit", "volser", "space", "dcb"} - ds.keys()

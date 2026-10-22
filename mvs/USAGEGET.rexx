@@ -1,29 +1,48 @@
 /* REXX *************************************************************/
-/* USAGEGET - FETCH THE CLUSTER USAGE OF ONE DAY FROM               */
-/*            VICTORIAMETRICS (PROMQL OVER HTTP)                     */
+/* USAGEGET - FETCH THE CLUSTER USAGE FROM VICTORIAMETRICS           */
+/*            (PROMQL OVER HTTP)                                    */
 /*                                                                  */
-/* ARG     : DATE=YYYY-MM-DD  USAGE DATE (DEFAULT: YESTERDAY)       */
-/*           HOST=A.B.C.D     VICTORIAMETRICS (DEFAULT: 10.20.1.20) */
-/* DD USAGE: 80-BYTE USAGE RECORDS, ONE PER CLASS AND NAME          */
-/*           COLS  1-5  CLASS (K8S / HOST)                          */
-/*           COLS  6-29 NAME                                        */
-/*           COLS 30-65 CPU-H, MEM-GBH, NET-GB, STOR-GB, 9(7)V99    */
-/* DD CTLCARD: USAGE DATE AND RUN DATE                              */
-/* RC      : 0 OK, 8 ERROR                                          */
+/* ARG : MODE=REPORT    ONE DAY: DATE= OR YESTERDAY (DEFAULT)       */
+/*       MODE=LEDGER    FROM THE NEXT BUSINESS DATE IN DD BIZDATE   */
+/*                      TO YESTERDAY. IF BIZDATE IS EMPTY (FIRST    */
+/*                      RUN), FROM START= OR YESTERDAY.             */
+/*       DATE=YYYY-MM-DD   USAGE DATE (MODE=REPORT)                 */
+/*       START=YYYY-MM-DD  FIRST BUSINESS DATE (MODE=LEDGER)        */
+/*       HOST=A.B.C.D      VICTORIAMETRICS (DEFAULT: 10.20.1.20)    */
+/*                                                                  */
+/* DD USAGE  : 80-BYTE USAGE RECORDS, ONE PER DATE, CLASS AND NAME  */
+/*             COLS  1-8  DATE YYYYMMDD                             */
+/*             COLS  9-13 CLASS (K8S / HOST)                        */
+/*             COLS 14-37 NAME                                      */
+/*             COLS 38-73 CPU-H, MEM-GBH, NET-GB, STOR-GB 9(7)V99   */
+/* DD CTLCARD: RUN RECORD, THEN ONE DAY RECORD PER DATE             */
+/*             RUN YYYY-MM-DD(RUN) YYYY-MM-DD(FROM) YYYY-MM-DD(TO)  */
+/*                 YYYYMMDD(NEXT BUSINESS DATE)                     */
+/*             DAY YYYYMMDD M     (M: MONDAY)                       */
+/* DD BIZDATE: (MODE=LEDGER) COLS 1-8 NEXT BUSINESS DATE YYYYMMDD   */
+/* RC  : 0 OK, 4 NOTHING TO DO (LEDGER IS UP TO DATE), 8 ERROR      */
 /*                                                                  */
 /* NOTES                                                            */
 /*  - THE REQUEST IS SENT IN ASCII (E2A) AND THE RESPONSE IS READ   */
 /*    BACK IN EBCDIC (A2E).                                         */
 /*  - SOME CHARACTERS SUCH AS [ ] DO NOT SURVIVE E2A, SO URLENC     */
 /*    PERCENT-ENCODES THEM WITH ITS OWN TABLE.                      */
+/*  - ALL QUERIES GO OVER ONE CONNECTION (HTTP/1.1 KEEP-ALIVE).     */
+/*    SOCKET NUMBERS ARE NOT REUSED EVEN AFTER TCPCLOSE, AND BREXX  */
+/*    FAILS ONCE THEY REACH 64 (SELECT). THE NUMBERS ARE RESET ONLY */
+/*    BY RESTARTING HERCULES (THE WEEKLY IPL OF NUAGE-CLUSTER).     */
 /********************************************************************/
 NUMERIC DIGITS 15
+MODE = 'REPORT'
 UDATE = ''
+START = ''
 VMHOST = '10.20.1.20'
 DO W = 1 TO WORDS(ARG(1))
   PARSE VALUE WORD(ARG(1), W) WITH KW '=' KV
   SELECT
+    WHEN TRANSLATE(KW) = 'MODE' THEN MODE = TRANSLATE(KV)
     WHEN TRANSLATE(KW) = 'DATE' THEN UDATE = KV
+    WHEN TRANSLATE(KW) = 'START' THEN START = KV
     WHEN TRANSLATE(KW) = 'HOST' THEN VMHOST = KV
     OTHERWISE DO
       SAY 'UNKNOWN ARGUMENT:' WORD(ARG(1), W)
@@ -36,13 +55,35 @@ CRLF = '0D25'X
 CRLF2 = CRLF || CRLF
 GIB = 1073741824
 
+/* ----------------------------------------------------------------- */
+/* DATES (DAYS SINCE 1970-01-01, LOCAL TIME = JST)                   */
+/* ----------------------------------------------------------------- */
 TODAY = DAYS(DATE('S'))
-IF UDATE = '' THEN UDAY = TODAY - 1
-ELSE UDAY = DAYS(SPACE(TRANSLATE(UDATE, ' ', '-'), 0))
-/* EVALUATE AT 00:00 JST OF THE NEXT DAY, SO THAT THE [1d] WINDOWS  */
-/* COVER THE USAGE DATE FROM 00:00 TO 24:00 JST                     */
-EVALTS = (UDAY + 1) * 86400 - 9 * 3600
-SAY 'USAGE DATE' CIVIL(UDAY) 'EVALUATED AT' EVALTS
+LASTDAY = TODAY - 1
+IF MODE = 'REPORT' THEN DO
+  IF UDATE = '' THEN FIRSTDAY = LASTDAY
+  ELSE FIRSTDAY = DAYS(YMD(UDATE))
+  LASTDAY = FIRSTDAY
+END
+ELSE IF MODE = 'LEDGER' THEN DO
+  "EXECIO * DISKR BIZDATE (STEM BIZ. FINIS"
+  IF RC > 2 THEN DO
+    SAY 'CANNOT READ BIZDATE, RC=' RC
+    EXIT 8
+  END
+  IF BIZ.0 > 0 THEN FIRSTDAY = DAYS(SUBSTR(BIZ.1, 1, 8))
+  ELSE IF START <> '' THEN FIRSTDAY = DAYS(YMD(START))
+  ELSE FIRSTDAY = LASTDAY
+  IF FIRSTDAY > LASTDAY THEN DO
+    SAY 'NOTHING TO DO: NEXT BUSINESS DATE IS' CIVIL(FIRSTDAY)
+    EXIT 4
+  END
+END
+ELSE DO
+  SAY 'UNKNOWN MODE:' MODE
+  EXIT 8
+END
+SAY MODE 'FROM' CIVIL(FIRSTDAY) 'TO' CIVIL(LASTDAY)
 
 /* ----------------------------------------------------------------- */
 /* QUERIES: 1 CPU-H, 2 MEM-GBH, 3 NET-GB, 4 STOR-GB                  */
@@ -86,22 +127,36 @@ CLASS.1 = 'K8S'
 CLASS.2 = 'HOST'
 
 /* ----------------------------------------------------------------- */
-/* FETCH                                                             */
+/* FETCH: ONE SET OF QUERIES PER DAY, EVALUATED AT 00:00 JST OF THE  */
+/* NEXT DAY SO THAT THE [1d] WINDOWS COVER THAT DAY (00:00-24:00)    */
 /* ----------------------------------------------------------------- */
 CALL TCPINIT
+IF TCPOPEN(VMHOST, VMPORT, 10) < 0 THEN DO
+  SAY 'TCPOPEN FAILED:' VMHOST VMPORT
+  CALL TCPTERM
+  EXIT 8
+END
+SOCK = _FD
+SAY 'CONNECTED TO' VMHOST VMPORT 'SOCKET' SOCK
+BUF = ''                               /* RECEIVED, NOT YET USED   */
 NKEYS = 0
-SEEN. = 0                              /* NAMES ALREADY COLLECTED  */
+SEEN. = 0                              /* KEYS ALREADY COLLECTED   */
 VAL. = 0                               /* VALUES DEFAULT TO ZERO   */
-DO C = 1 TO 2
-  DO I = 1 TO 4
-    BODY = QUERY(Q.C.I)
-    IF BODY = '' THEN DO
-      CALL TCPTERM
-      EXIT 8
+DO DAY = FIRSTDAY TO LASTDAY
+  EVALTS = (DAY + 1) * 86400 - 9 * 3600
+  DO C = 1 TO 2
+    DO I = 1 TO 4
+      BODY = QUERY(Q.C.I)
+      IF BODY = '' THEN DO
+        CALL TCPCLOSE SOCK
+        CALL TCPTERM
+        EXIT 8
+      END
+      CALL COLLECT
     END
-    CALL COLLECT
   END
 END
+CALL TCPCLOSE SOCK
 CALL TCPTERM
 
 IF NKEYS = 0 THEN DO
@@ -114,20 +169,30 @@ END
 /* ----------------------------------------------------------------- */
 DO K = 1 TO NKEYS
   KEY = KEYS.K
-  PARSE VAR KEY CL '/' NAME
+  PARSE VAR KEY D '/' CL '/' NAME
   NUMS = ''
   DO I = 1 TO 4
     V = FORMAT(MAX(VAL.KEY.I, 0) * 100, , 0)
     NUMS = NUMS || RIGHT(MIN(V, 999999999), 9, '0')
   END
-  OUT.K = LEFT(LEFT(CL, 5) || LEFT(TRANSLATE(NAME), 24) || NUMS, 80)
+  OUT.K = LEFT(YMD(CIVIL(D)) || LEFT(CL, 5) ||,
+               LEFT(TRANSLATE(NAME), 24) || NUMS, 80)
 END
 OUT.0 = NKEYS
 "EXECIO * DISKW USAGE (STEM OUT. FINIS"
 IF RC <> 0 THEN EXIT 8
 
-CTL.1 = LEFT(CIVIL(UDAY) CIVIL(TODAY), 80)
-CTL.0 = 1
+CTL.1 = LEFT('RUN' CIVIL(TODAY) CIVIL(FIRSTDAY) CIVIL(LASTDAY),
+             YMD(CIVIL(LASTDAY + 1)), 80)
+N = 1
+DO DAY = FIRSTDAY TO LASTDAY
+  N = N + 1
+  /* DAY 0 (1970-01-01) WAS A THURSDAY, SO (DAY + 3) // 7 = 0 IS MON */
+  IF (DAY + 3) // 7 = 0 THEN MON = 'M'
+  ELSE MON = ' '
+  CTL.N = LEFT('DAY' YMD(CIVIL(DAY)) MON, 80)
+END
+CTL.0 = N
 "EXECIO * DISKW CTLCARD (STEM CTL. FINIS"
 IF RC <> 0 THEN EXIT 8
 
@@ -140,25 +205,50 @@ EXIT 0
 QUERY:
   PARSE ARG PROMQL
   REQ = 'GET /api/v1/query?time='EVALTS'&query='URLENC(PROMQL),
-     || ' HTTP/1.0' || CRLF || 'Host: 'VMHOST || CRLF || CRLF
-  IF TCPOPEN(VMHOST, VMPORT, 10) < 0 THEN DO
-    SAY 'TCPOPEN FAILED:' VMHOST VMPORT
+     || ' HTTP/1.1' || CRLF || 'Host: 'VMHOST || CRLF,
+     || 'Connection: keep-alive' || CRLF || CRLF
+  IF TCPSEND(SOCK, E2A(REQ), 10) < 0 THEN DO
+    SAY 'TCPSEND FAILED'
     RETURN ''
   END
-  CALL TCPSEND _FD, E2A(REQ), 10
-  RESP = ''
-  DO FOREVER
-    IF TCPRECEIVE(_FD, 30) <= 0 THEN LEAVE
-    RESP = RESP || _DATA
+  /* THE HEADER ENDS WITH AN EMPTY LINE                              */
+  DO WHILE POS(CRLF2, BUF) = 0
+    IF RECEIVE() = 0 THEN RETURN ''
   END
-  PARSE VALUE A2E(RESP) WITH HEAD (CRLF2) RBODY
-  PARSE VAR HEAD HEAD (CRLF) .
-  IF POS('"status":"success"', RBODY) = 0 THEN DO
-    SAY 'QUERY FAILED:' HEAD
+  PARSE VAR BUF HEAD (CRLF2) BUF
+  UHEAD = TRANSLATE(HEAD)
+  P = POS('CONTENT-LENGTH:', UHEAD)
+  IF P = 0 THEN DO
+    SAY 'NO CONTENT-LENGTH:' HEAD
+    RETURN ''
+  END
+  PARSE VALUE SUBSTR(UHEAD, P + 15) WITH CLEN (CRLF) .
+  CLEN = STRIP(CLEN)
+  /* THE BODY IS EXACTLY CONTENT-LENGTH BYTES                        */
+  DO WHILE LENGTH(BUF) < CLEN
+    IF RECEIVE() = 0 THEN RETURN ''
+  END
+  RBODY = LEFT(BUF, CLEN)
+  BUF = SUBSTR(BUF, CLEN + 1)
+  PARSE VAR HEAD STATUSLINE (CRLF) .
+  IF WORD(STATUSLINE, 2) <> '200' |,
+     POS('"status":"success"', RBODY) = 0 THEN DO
+    SAY 'QUERY FAILED:' STATUSLINE
     SAY SUBSTR(RBODY, 1, 200)
     RETURN ''
   END
   RETURN RBODY
+
+/* ----------------------------------------------------------------- */
+/* RECEIVE: APPEND THE NEXT CHUNK (IN EBCDIC) TO BUF. 0 ON ERROR     */
+/* ----------------------------------------------------------------- */
+RECEIVE:
+  IF TCPRECEIVE(SOCK, 30) <= 0 THEN DO
+    SAY 'TCPRECEIVE FAILED OR TIMED OUT'
+    RETURN 0
+  END
+  BUF = BUF || A2E(_DATA)
+  RETURN 1
 
 /* ----------------------------------------------------------------- */
 /* COLLECT: PICK (NAME, VALUE) PAIRS OF CLASS C, COLUMN I FROM BODY  */
@@ -176,7 +266,7 @@ COLLECT:
     IF P = 0 THEN ITERATE
     PARSE VALUE SUBSTR(SEG, P + LENGTH(LABEL)) WITH NAME '"' .
     IF NAME = '' THEN ITERATE
-    KEY = CLASS.C'/'NAME
+    KEY = DAY'/'CLASS.C'/'NAME
     IF SEEN.KEY = 0 THEN DO
       SEEN.KEY = 1
       NKEYS = NKEYS + 1
@@ -213,6 +303,7 @@ URLENC: PROCEDURE
 
 /* ----------------------------------------------------------------- */
 /* DAYS : YYYYMMDD -> DAYS SINCE 1970-01-01                          */
+/* YMD  : YYYY-MM-DD -> YYYYMMDD                                     */
 /* CIVIL: DAYS SINCE 1970-01-01 -> YYYY-MM-DD                        */
 /* ----------------------------------------------------------------- */
 DAYS: PROCEDURE
@@ -223,6 +314,9 @@ DAYS: PROCEDURE
   DOY = (153 * ((M + 9) // 12) + 2) % 5 + D - 1
   DOE = YOE * 365 + YOE % 4 - YOE % 100 + DOY
   RETURN ERA * 146097 + DOE - 719468
+
+YMD: PROCEDURE
+  RETURN SPACE(TRANSLATE(ARG(1), ' ', '-'), 0)
 
 CIVIL: PROCEDURE
   Z = ARG(1) + 719468
