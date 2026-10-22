@@ -1,0 +1,217 @@
+# cicerone3270 (3270 端末の案内) に足す、使用量勘定の辞書。
+# nuage-cluster が mainframe ホストの cicerone3270 に読ませる (パッケージの cicerone3270/ に入る)。
+# 手元で試す: ci3270 --guide guide 127.0.0.1:3270 (Ctrl+L で読み直せる)
+# 書式は cicerone3270 の README の「辞書」を参照。
+
+# ---------------------------------------------------------------- 画面に足す「できること」と説明
+
+[[screen]]
+id = "ledger-dslist-entry"
+extends = "dslist-entry"
+
+[[screen.action]]
+label = "使用量勘定 (NUAGE.USAGE) を一覧"
+keys = "{home}{tab}{eraseeof}NUAGE.USAGE{enter}"
+
+[[screen]]
+id = "ledger-dslist"
+extends = "dslist"
+description = "使用量勘定の勘定マスタは NUAGE.USAGE.MASTER の一番新しい世代が最新の残高である。"
+
+[[screen.region]]
+rows = [3, 22]
+cols = [69, 74]
+title = "使用量勘定のレコード長"
+note = "勘定マスタは 100、仕訳・総勘定元帳・業務日付は 80。"
+
+[[screen]]
+id = "ledger-tso-welcome"
+extends = "tso-welcome"
+
+[[screen.action]]
+label = "使用量勘定のデータセットを一覧 (LISTCAT)"
+keys = "LISTCAT LEVEL(NUAGE){enter}"
+
+[[screen]]
+id = "ledger-tso-ready"
+extends = "tso-ready"
+
+[[screen.action]]
+label = "使用量勘定のデータセットを一覧 (LISTCAT)"
+keys = "LISTCAT LEVEL(NUAGE){enter}"
+
+# ---------------------------------------------------------------- データセット
+
+[[term]]
+pattern = '\bNUAGE\.USAGE\.MASTER(\.G\d{4}V\d{2})?'
+title = "勘定マスタ"
+note = "勘定ごとの残高・割当累計・使用累計 (補助元帳)。日次の締め (ジョブ LEDGER) のたびに新しい世代を作る。100 バイトのレコード 1 件が 1 勘定。"
+
+[[term]]
+pattern = '\bNUAGE\.USAGE\.JOURNAL(\.G\d{4}V\d{2})?'
+title = "仕訳"
+note = "締めで記帳した仕訳 (借方科目・貸方科目・金額)。締めごとに 1 世代。"
+
+[[term]]
+pattern = '\bNUAGE\.USAGE\.GL(\.G\d{4}V\d{2})?'
+title = "総勘定元帳"
+note = "科目 (1100 割当原資 / 2100 利用者勘定 / 4100 使用量) ごとの借方・貸方の累計。締めの試算表はここから作る。"
+
+[[term]]
+pattern = '\bNUAGE\.USAGE\.BIZDATE\b'
+title = "業務日付"
+note = "次に締める日と、最後に締めた日。締めが成功したときだけ進む。"
+
+[[term]]
+pattern = '\bNUAGE\.USAGE\.CNTL\b'
+title = "管理表 (PDS)"
+note = "料率表 RATES と勘定定義 ACCTDEF をメンバーに持つ。Git (nuage-usage-ledger) から反映される。"
+
+[[term]]
+pattern = '\bNUAGE\.USAGE\.JCLLIB\b'
+title = "ジョブのライブラリ (PDS)"
+note = "ジョブ USAGERPT (日次使用量明細) と LEDGER (日次の締め) の JCL。毎朝 ZTIMER が投入する。"
+
+[[term]]
+pattern = '\bNUAGE\.USAGE\.GDGMODEL\b'
+title = "GDG のモデル"
+note = "GDG の世代を作るときに属性を写す元 (MVS 3.8j では必要)。データは持たない。"
+
+# ---------------------------------------------------------------- レコード定義
+# ブラウズ画面でマウス位置の桁が何の項目かを出し、16 進表示なら値を読む。
+# 定義の出典は mvs/POSTING.cbl (COBOL のレコード定義)。レコードを変えたら合わせて変える。
+# dataset は世代 (.G0001V00) とメンバー名 ((RATES)) を除いた名前に当てる。
+# kind: char (文字) / zoned (数字の文字) / packed (パック 10 進数 COMP-3)
+
+[[layout]]
+dataset = 'NUAGE\.USAGE\.MASTER'
+title = "勘定マスタのレコード (100 バイト)"
+
+[[layout.field]]
+cols = [1, 10]
+name = "勘定番号 (NM-ACCT)"
+note = "100- が K8S (名前空間)、200- が HOST (ホスト)。"
+
+[[layout.field]]
+cols = [11, 15]
+name = "区分 (NM-CLASS)"
+
+[[layout.field]]
+cols = [16, 39]
+name = "名称 (NM-NAME)"
+
+[[layout.field]]
+cols = [40, 45]
+name = "残高 (NM-BAL)"
+kind = "packed"
+note = "PIC S9(11) COMP-3。単位は RU。割当累計 - 使用累計。"
+
+[[layout.field]]
+cols = [46, 51]
+name = "割当累計 (NM-ALLOC)"
+kind = "packed"
+note = "PIC S9(11) COMP-3。開設時の割当と、毎週月曜の割当の合計。"
+
+[[layout.field]]
+cols = [52, 57]
+name = "使用累計 (NM-USED)"
+kind = "packed"
+note = "PIC S9(11) COMP-3。日々の使用量を RU に換算した合計。"
+
+[[layout.field]]
+cols = [58, 65]
+name = "開設日 (NM-OPENED)"
+
+[[layout.field]]
+cols = [66, 73]
+name = "最終取引日 (NM-LAST)"
+
+[[layout.field]]
+cols = [74, 74]
+name = "状態 (NM-STATUS)"
+note = "A = 勘定定義 (ACCTDEF) にある、U = 定義から消えた。"
+
+[[layout.field]]
+cols = [75, 100]
+name = "予備 (FILLER)"
+
+[[layout]]
+dataset = 'NUAGE\.USAGE\.JOURNAL'
+title = "仕訳のレコード (80 バイト)"
+
+[[layout.field]]
+cols = [1, 8]
+name = "日付 (J-DATE)"
+
+[[layout.field]]
+cols = [9, 14]
+name = "連番 (J-SEQ)"
+kind = "zoned"
+
+[[layout.field]]
+cols = [15, 18]
+name = "借方科目 (J-DEBIT)"
+note = "1100 割当原資 / 2100 利用者勘定 / 4100 使用量。"
+
+[[layout.field]]
+cols = [19, 22]
+name = "貸方科目 (J-CREDIT)"
+
+[[layout.field]]
+cols = [23, 32]
+name = "勘定番号 (J-ACCT)"
+
+[[layout.field]]
+cols = [33, 33]
+name = "種別 (J-TYPE)"
+note = "O = 開設時の割当、A = 週次の割当、U = 使用。"
+
+[[layout.field]]
+cols = [34, 44]
+name = "金額 (J-AMOUNT)"
+kind = "zoned"
+note = "PIC 9(11)。単位は RU。"
+
+[[layout.field]]
+cols = [45, 80]
+name = "予備 (FILLER)"
+
+[[layout]]
+dataset = 'NUAGE\.USAGE\.GL'
+title = "総勘定元帳のレコード (80 バイト)"
+
+[[layout.field]]
+cols = [1, 4]
+name = "科目コード (NG-CODE)"
+
+[[layout.field]]
+cols = [5, 20]
+name = "科目名 (NG-NAME)"
+
+[[layout.field]]
+cols = [21, 26]
+name = "借方累計 (NG-DEBIT)"
+kind = "packed"
+note = "PIC S9(11) COMP-3。"
+
+[[layout.field]]
+cols = [27, 32]
+name = "貸方累計 (NG-CREDIT)"
+kind = "packed"
+note = "PIC S9(11) COMP-3。"
+
+[[layout.field]]
+cols = [33, 80]
+name = "予備 (FILLER)"
+
+[[layout]]
+dataset = 'NUAGE\.USAGE\.BIZDATE'
+title = "業務日付のレコード (80 バイト)"
+
+[[layout.field]]
+cols = [1, 8]
+name = "次に締める日 (B-NEXT)"
+
+[[layout.field]]
+cols = [10, 17]
+name = "最後に締めた日 (B-LAST)"

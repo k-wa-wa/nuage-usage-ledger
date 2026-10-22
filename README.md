@@ -44,6 +44,7 @@
 | `mvs/schedule` | ZTIMER の予定表 (`SYS2.CONTROL(ZTIMER)`) に足す行 |
 | `mvs/rakf` | RAKF の権限表 (`SYS1.SECURE.CNTL(PROFILES)`) に足す行。`NUAGE.USAGE.*` への書き込みを許す |
 | `mvs/datasets.json` | このアプリが使うデータセット (無ければ作られる。PO / PS / GDG) |
+| `guide/ledger.toml` | 3270 端末の案内 [cicerone3270](https://github.com/k-wa-wa/cicerone3270) に足す辞書。データセットの説明と、勘定マスタ・仕訳・総勘定元帳・業務日付のレコード定義 (ブラウズ画面で項目名と値を出す) |
 | `flake.nix` | 上をまとめて、nuage-cluster に渡す資材を作る |
 | `scripts/check_mvs_sources.py` | カード (80 桁) と MVS の制約の検査 (`nix flake check`) |
 

@@ -7,6 +7,7 @@
 - メインフレーム (MVS 3.8j on Hercules) で動く業務アプリ (JCL・REXX・COBOL) だけを持つ
 - 基盤 (LXC・Hercules・MVS/CE・mvs-config・帳票プリンタの PDF 化) は `../nuage-cluster` が持つ。基盤の変更はそちらで行う
 - `nix build` の出力 (`members/` `schedule` `datasets.json`) が nuage-cluster との約束事である。形を変えるときは nuage-cluster の `nix/hosts/mainframe/mvs-config.nix` と合わせて変える
+- `guide/ledger.toml` は 3270 端末の案内 (cicerone3270) に足す辞書で、出力の `cicerone3270/` に入る。COBOL のレコード (`mvs/POSTING.cbl` の FD) やデータセットを変えたら、辞書のレコード定義・説明も合わせて変える
 
 ## 2. 設計の方針
 

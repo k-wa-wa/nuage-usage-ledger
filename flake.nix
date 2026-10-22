@@ -21,6 +21,7 @@
       #   schedule                              ZTIMER の予定表 (SYS2.CONTROL(ZTIMER)) に足す行
       #   rakf                                  RAKF の権限表 (SYS1.SECURE.CNTL(PROFILES)) に足す行
       #   datasets.json                         無ければ作るデータセット
+      #   cicerone3270/                         3270 端末の案内 (cicerone3270) に足す辞書
       packages = forAllSystems (pkgs: {
         default = pkgs.runCommandLocal "nuage-usage-ledger-mvs" { } ''
           mkdir -p $out/members/NUAGE.USAGE.JCLLIB $out/members/NUAGE.USAGE.CNTL
@@ -38,6 +39,7 @@
           cp ${./mvs/schedule} $out/schedule
           cp ${./mvs/rakf} $out/rakf
           cp ${./mvs/datasets.json} $out/datasets.json
+          cp -r ${./guide} $out/cicerone3270
         '';
       });
 
@@ -47,6 +49,11 @@
           python3 ${./scripts/check_mvs_sources.py} ${
             self.packages.${pkgs.stdenv.hostPlatform.system}.default
           }
+          touch $out
+        '';
+        # cicerone3270 の辞書が TOML として読めるか
+        guide = pkgs.runCommandLocal "check-guide" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+          python3 -c 'import sys, tomllib; [tomllib.load(open(f, "rb")) for f in sys.argv[1:]]' ${./guide}/*.toml
           touch $out
         '';
       });
