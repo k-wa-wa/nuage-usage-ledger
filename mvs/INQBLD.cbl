@@ -9,7 +9,11 @@
       *                                                               *
       * INPUT : BIZDATE  - BUSINESS DATES (LAST CLOSED DATE)          *
       *         MASTER   - ACCOUNT MASTER, GENERATION 0               *
+      *         JRNLHIST - SAVED JOURNAL (ONE GENERATION A MONTH),    *
+      *                    ALL GENERATIONS (GDG BASE NAME)            *
       *         JOURNAL  - JOURNAL, ALL GENERATIONS (GDG BASE NAME)   *
+      *                    ENTRIES UP TO THE LAST CLOSED MONTH ARE    *
+      *                    SKIPPED: THEY ARE IN JRNLHIST ALREADY      *
       * OUTPUT: IMAST    - INQUIRY MASTER, 100 BYTES, KEY 1-10        *
       *                    A CONTROL RECORD (KEY 0000000000) FIRST,   *
       *                    THEN THE MASTER RECORDS AS THEY ARE        *
@@ -26,6 +30,7 @@
        FILE-CONTROL.
            SELECT BIZ-FILE     ASSIGN TO UT-S-BIZDATE.
            SELECT MAST-FILE    ASSIGN TO UT-S-MASTER.
+           SELECT HIST-FILE    ASSIGN TO UT-S-JRNLHIST.
            SELECT JRNL-FILE    ASSIGN TO UT-S-JOURNAL.
            SELECT IMAST-FILE   ASSIGN TO UT-S-IMAST.
            SELECT IJRN-FILE    ASSIGN TO UT-S-IJRN.
@@ -40,7 +45,9 @@
            05  B-NEXT              PIC X(8).
            05  FILLER              PIC X.
            05  B-LAST              PIC X(8).
-           05  FILLER              PIC X(63).
+           05  FILLER              PIC X.
+           05  B-MONTH             PIC X(6).
+           05  FILLER              PIC X(56).
        FD  MAST-FILE
            LABEL RECORDS ARE STANDARD
            BLOCK CONTAINS 10 RECORDS
@@ -62,6 +69,25 @@
            05  J-AMOUNT            PIC 9(11).
            05  FILLER              PIC X(36).
        01  J-ALL                   PIC X(80).
+       01  J-YMV.
+           05  J-YM                PIC X(6).
+           05  FILLER              PIC X(74).
+      *    THE SAVED JOURNAL HAS THE RECORD OF THE JOURNAL AS IT IS
+       FD  HIST-FILE
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 10 RECORDS
+           RECORD CONTAINS 80 CHARACTERS
+           DATA RECORD IS H-REC.
+       01  H-REC.
+           05  H-DATE              PIC 9(8).
+           05  H-SEQ               PIC 9(6).
+           05  FILLER              PIC X(8).
+           05  H-ACCT              PIC X(10).
+           05  FILLER              PIC X(48).
+       01  H-ALL                   PIC X(80).
+       01  H-YMV.
+           05  H-YM                PIC X(6).
+           05  FILLER              PIC X(74).
        FD  IMAST-FILE
            LABEL RECORDS ARE STANDARD
            BLOCK CONTAINS 10 RECORDS
@@ -78,6 +104,10 @@
        77  WS-EOF                  PIC X     VALUE 'N'.
        77  WS-ACCT-CNT             PIC 9(6)  VALUE ZERO.
        77  WS-JRNL-CNT             PIC 9(8)  VALUE ZERO.
+       77  WS-HIST-CNT             PIC 9(8)  VALUE ZERO.
+       77  WS-SKIP-CNT             PIC 9(8)  VALUE ZERO.
+       77  WS-CUTOFF               PIC X(6)  VALUE SPACES.
+       77  WS-HIST-MAX             PIC X(6)  VALUE SPACES.
       *
       * CONTROL RECORD OF THE INQUIRY MASTER (KEY 0000000000).
       * IT TELLS THE ONLINE AS OF WHICH CLOSING THE DATA IS.
@@ -115,17 +145,28 @@
            05  WS-B-DD             PIC XX.
        PROCEDURE DIVISION.
        0000-MAIN.
-           OPEN INPUT  BIZ-FILE MAST-FILE JRNL-FILE
+           OPEN INPUT  BIZ-FILE MAST-FILE HIST-FILE JRNL-FILE
                 OUTPUT IMAST-FILE IJRN-FILE.
            MOVE SPACES TO C-ASOF.
            READ BIZ-FILE AT END MOVE SPACES TO BIZ-REC.
            MOVE B-LAST TO C-ASOF.
+           MOVE B-MONTH TO WS-CUTOFF.
       *    THE MASTER IS IN ACCOUNT ORDER, SO IT IS COPIED AS IT IS.
       *    IT IS READ TWICE: FIRST FOR THE COUNT IN THE CONTROL
       *    RECORD, WHICH MUST COME FIRST IN KEY ORDER.
            PERFORM 1000-COUNT-MASTER THRU 1000-EXIT
                UNTIL WS-EOF = 'Y'.
            CLOSE MAST-FILE.
+      *    THE SAVED JOURNAL FIRST. IF IT HAS A MONTH AFTER THE LAST
+      *    CLOSED MONTH (A COMMIT OF LEDGMON FAILED HALF WAY), THAT
+      *    MONTH IS ALSO SKIPPED IN THE JOURNAL, SO NO ENTRY IS TWICE.
+           MOVE 'N' TO WS-EOF.
+           PERFORM 1500-BUILD-HIST THRU 1500-EXIT
+               UNTIL WS-EOF = 'Y'.
+           IF WS-HIST-MAX > WS-CUTOFF
+               DISPLAY 'INQBLD: JRNLHIST HAS ' WS-HIST-MAX
+                       ', AFTER THE LAST CLOSED MONTH ' WS-CUTOFF
+               MOVE WS-HIST-MAX TO WS-CUTOFF.
            MOVE 'N' TO WS-EOF.
            PERFORM 2000-BUILD-JOURNAL THRU 2000-EXIT
                UNTIL WS-EOF = 'Y'.
@@ -142,10 +183,14 @@
            MOVE 'N' TO WS-EOF.
            PERFORM 3000-COPY-MASTER THRU 3000-EXIT
                UNTIL WS-EOF = 'Y'.
-           CLOSE BIZ-FILE MAST-FILE JRNL-FILE IMAST-FILE IJRN-FILE.
+           CLOSE BIZ-FILE MAST-FILE HIST-FILE JRNL-FILE
+                 IMAST-FILE IJRN-FILE.
            DISPLAY 'INQBLD AS OF CLOSING  ' C-ASOF.
+           DISPLAY 'INQBLD SAVED UP TO    ' WS-CUTOFF.
            DISPLAY 'INQBLD ACCOUNTS       ' WS-ACCT-CNT.
            DISPLAY 'INQBLD JOURNAL        ' WS-JRNL-CNT.
+           DISPLAY 'INQBLD  FROM JRNLHIST ' WS-HIST-CNT.
+           DISPLAY 'INQBLD  SKIPPED       ' WS-SKIP-CNT.
            STOP RUN.
 
        1000-COUNT-MASTER.
@@ -154,9 +199,26 @@
        1000-EXIT.
            EXIT.
 
+       1500-BUILD-HIST.
+           READ HIST-FILE AT END MOVE 'Y' TO WS-EOF.
+           IF WS-EOF = 'Y' GO TO 1500-EXIT.
+           IF H-YM > WS-HIST-MAX
+               MOVE H-YM TO WS-HIST-MAX.
+           MOVE H-ACCT TO IJ-ACCT.
+           SUBTRACT H-DATE FROM 99999999 GIVING IJ-RDATE.
+           SUBTRACT H-SEQ FROM 999999 GIVING IJ-RSEQ.
+           MOVE H-ALL TO IJ-JREC.
+           WRITE IJ-OUT FROM IJ-REC.
+           ADD 1 TO WS-JRNL-CNT WS-HIST-CNT.
+       1500-EXIT.
+           EXIT.
+
        2000-BUILD-JOURNAL.
            READ JRNL-FILE AT END MOVE 'Y' TO WS-EOF.
            IF WS-EOF = 'Y' GO TO 2000-EXIT.
+           IF WS-CUTOFF NOT = SPACES AND J-YM NOT > WS-CUTOFF
+               ADD 1 TO WS-SKIP-CNT
+               GO TO 2000-EXIT.
            MOVE J-ACCT TO IJ-ACCT.
            SUBTRACT J-DATE FROM 99999999 GIVING IJ-RDATE.
            SUBTRACT J-SEQ FROM 999999 GIVING IJ-RSEQ.

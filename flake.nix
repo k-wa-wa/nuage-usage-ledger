@@ -35,6 +35,9 @@
             --replace-fail '{{USAGEGET}}' "$(cat ${./mvs/USAGEGET.rexx})" \
             --replace-fail '{{TRANGEN}}' "$(cat ${./mvs/TRANGEN.cbl})" \
             --replace-fail '{{POSTING}}' "$(cat ${./mvs/POSTING.cbl})"
+          substitute ${./mvs/LEDGMON.jcl} $out/members/NUAGE.USAGE.JCLLIB/LEDGMON \
+            --replace-fail '{{MONSEL}}' "$(cat ${./mvs/MONSEL.cbl})" \
+            --replace-fail '{{ACCTLDG}}' "$(cat ${./mvs/ACCTLDG.cbl})"
           substitute ${./mvs/LEDGINQ.jcl} $out/members/NUAGE.USAGE.JCLLIB/LEDGINQ \
             --replace-fail '{{INQBLD}}' "$(cat ${./mvs/INQBLD.cbl})"
           # オンライン (KICKS): 表・マップ・プログラムを 1 本のビルドジョブにまとめる。

@@ -18,6 +18,10 @@
       * BALANCE AFTER THAT ENTRY. A COMMAREA OF 10 BYTES IS AN        *
       * ACCOUNT NO FROM THE ACCOUNT LIST (LLST).                      *
       *                                                               *
+      * A MONTH (YYYYMM) TYPED WITH THE ACCOUNT STARTS THE JOURNAL    *
+      * FROM THE LAST DAY OF THAT MONTH. THE BALANCE AT THAT POINT IS *
+      * FOUND BY READING THE NEWER ENTRIES AND TAKING THEM OFF.       *
+      *                                                               *
       * KEYS: ENTER = INQUIRE THE ACCOUNT TYPED, PF5 = ACCOUNT LIST,  *
       *       PF7 / PF8 = NEWER / OLDER ENTRIES, PF3 OR CLEAR = END   *
       *                                                               *
@@ -37,9 +41,11 @@
        77  WS-EDIT                 PIC ---,---,---,--9.
       *    LENGTH OF CA-AREA. ANY OTHER COMMAREA (NONE, OR WHAT KICKS
       *    GIVES THE FIRST TRANSACTION AT STARTUP) IS A FIRST TIME.
-       77  WS-CA-LEN               PIC S9(4) COMP VALUE +1543.
+       77  WS-CA-LEN               PIC S9(4) COMP VALUE +1549.
        77  WS-ENDMSG               PIC X(60) VALUE
            'LBAL ENDED. TYPE LLST, LBAL OR KSSF (SIGN OFF).'.
+       77  WS-FIRSTMSG             PIC X(60) VALUE
+           'FIRST PAGE OF THE MONTH. BLANK THE MONTH FOR THE NEWEST'.
       *
       * COMMAREA
       *
@@ -48,6 +54,7 @@
            05  CA-PAGE             PIC 9(3).
            05  CA-NEXT-KEY         PIC X(24).
            05  CA-NEXT-BAL         PIC S9(11) COMP-3.
+           05  CA-MONTH            PIC X(6).
            05  CA-TOP              OCCURS 50 TIMES.
                10  CA-TOP-KEY      PIC X(24).
                10  CA-TOP-BAL      PIC S9(11) COMP-3.
@@ -94,6 +101,19 @@
        01  WS-KEY.
            05  WS-KEY-ACCT         PIC X(10).
            05  WS-KEY-REST         PIC X(14).
+           05  WS-KEY-R REDEFINES WS-KEY-REST.
+               10  WS-KEY-RDATE    PIC 9(8).
+               10  WS-KEY-RSEQ     PIC X(6).
+       01  WS-START-KEY            PIC X(24).
+      *
+      * MONTH AS TYPED: YYYYMM, OR BLANK FOR THE NEWEST ENTRIES
+      *
+       01  WS-MONTH.
+           05  WS-MON              PIC X(6).
+           05  WS-MON-R REDEFINES WS-MON.
+               10  WS-MON-Y        PIC 9(4).
+               10  WS-MON-M        PIC 9(2).
+           05  WS-MON-N REDEFINES WS-MON PIC 9(6).
       *
       * ACCOUNT NO AS TYPED: 1000000001 OR 100-0000001
       *
@@ -153,12 +173,13 @@
        LINKAGE SECTION.
        01  KIKCOMMAREA.
            05  LK-ACCT             PIC X(10).
-           05  FILLER              PIC X(1533).
+           05  FILLER              PIC X(1539).
 
        PROCEDURE DIVISION.
        0000-MAIN.
            MOVE LOW-VALUE TO LBALMAPO.
            MOVE 'N' TO WS-END.
+           MOVE SPACES TO WS-MON.
            IF EIBCALEN = WS-CA-LEN
                MOVE KIKCOMMAREA TO CA-AREA
                PERFORM 3000-KEY THRU 3000-EXIT
@@ -213,13 +234,55 @@
                PERFORM 9000-FILE-ERROR THRU 9000-EXIT
                GO TO 2000-EXIT.
            MOVE WS-ACCT TO CA-ACCT.
+           MOVE WS-MON TO CA-MONTH.
            MOVE 1 TO CA-PAGE.
            MOVE WS-ACCT TO WS-KEY-ACCT.
            MOVE ALL '0' TO WS-KEY-REST.
            MOVE WS-KEY TO CA-TOP-KEY (1).
            MOVE IM-BAL TO CA-TOP-BAL (1).
+           IF WS-MON NOT = SPACES
+               PERFORM 2100-FROM-MONTH THRU 2100-EXIT.
            PERFORM 4000-SHOW THRU 4000-EXIT.
        2000-EXIT.
+           EXIT.
+
+      *    THE FIRST PAGE STARTS AT THE LAST DAY OF THE MONTH: THE KEY
+      *    ACCOUNT + INVERTED YYYYMM99 + 000000 IS JUST BEFORE THE
+      *    NEWEST ENTRY OF THE MONTH. THE BALANCE AFTER THAT ENTRY IS
+      *    THE BALANCE OF THE MASTER LESS THE NEWER ENTRIES.
+       2100-FROM-MONTH.
+           MOVE WS-ACCT TO WS-KEY-ACCT.
+           COMPUTE WS-KEY-RDATE = 99999999 - (WS-MON-N * 100 + 99).
+           MOVE ALL '0' TO WS-KEY-RSEQ.
+           MOVE WS-KEY TO WS-START-KEY.
+           MOVE IM-BAL TO WS-RUNBAL.
+           MOVE ALL '0' TO WS-KEY-REST.
+           EXEC KICKS
+               STARTBR FILE('INQJRNL') RIDFLD(WS-KEY) GTEQ
+                       RESP(WS-RESP)
+           END-EXEC.
+           IF WS-RESP NOT = KIKRESP(NORMAL)
+               GO TO 2100-SET.
+       2100-NEXT.
+           EXEC KICKS
+               READNEXT FILE('INQJRNL') INTO(IJ-REC) RIDFLD(WS-KEY)
+                        RESP(WS-RESP)
+           END-EXEC.
+           IF WS-RESP NOT = KIKRESP(NORMAL) OR IJ-ACCT NOT = WS-ACCT
+               GO TO 2100-END.
+           IF IJ-KEY NOT < WS-START-KEY
+               GO TO 2100-END.
+           PERFORM 4400-EFFECT THRU 4400-EXIT.
+           SUBTRACT WS-EFFECT FROM WS-RUNBAL.
+           GO TO 2100-NEXT.
+       2100-END.
+           EXEC KICKS
+               ENDBR FILE('INQJRNL') RESP(WS-RESP)
+           END-EXEC.
+       2100-SET.
+           MOVE WS-START-KEY TO CA-TOP-KEY (1).
+           MOVE WS-RUNBAL TO CA-TOP-BAL (1).
+       2100-EXIT.
            EXIT.
 
       *****************************************************************
@@ -260,6 +323,9 @@
            IF WS-RESP = KIKRESP(NORMAL) AND ACCTL > ZERO
                MOVE ACCTI TO WS-IN.
            EXAMINE WS-IN REPLACING ALL LOW-VALUE BY SPACE.
+           IF WS-RESP = KIKRESP(NORMAL) AND MONTHL > ZERO
+               MOVE MONTHI TO WS-MON.
+           EXAMINE WS-MON REPLACING ALL LOW-VALUE BY SPACE.
            MOVE LOW-VALUE TO LBALMAPO.
            IF WS-IN-DASH = '-' AND WS-IN-CLS NUMERIC
                                AND WS-IN-SER NUMERIC
@@ -276,6 +342,23 @@
                MOVE 'Y' TO WS-ALARM
                MOVE SPACES TO CA-ACCT
                GO TO 3100-EXIT.
+      *    THE MONTH: BLANK, OR YYYYMM WITH A MONTH OF 01-12
+           IF WS-MON = SPACES
+               GO TO 3100-GO.
+           IF WS-MON NOT NUMERIC
+               GO TO 3100-BAD-MONTH.
+           IF WS-MON-M > ZERO AND WS-MON-M < 13
+               GO TO 3100-GO.
+       3100-BAD-MONTH.
+           PERFORM 7000-ASOF THRU 7000-EXIT.
+           MOVE WS-IN TO ACCTO.
+           MOVE WS-MON TO MONTHO.
+           MOVE 'TYPE THE MONTH AS YYYYMM (202610), OR LEAVE IT BLANK'
+               TO MSGO.
+           MOVE 'Y' TO WS-ALARM.
+           MOVE SPACES TO CA-ACCT.
+           GO TO 3100-EXIT.
+       3100-GO.
            PERFORM 2000-NEW-ACCOUNT THRU 2000-EXIT.
        3100-EXIT.
            EXIT.
@@ -291,7 +374,7 @@
                    PERFORM 4000-SHOW THRU 4000-EXIT
                ELSE
                    PERFORM 4000-SHOW THRU 4000-EXIT
-                   MOVE 'THIS IS THE NEWEST PAGE' TO MSGO
+                   PERFORM 3210-FIRST-PAGE THRU 3210-EXIT
                    MOVE 'Y' TO WS-ALARM.
            IF EIBAID = KIKPF8
                IF CA-NEXT-KEY NOT = SPACES AND CA-PAGE < 50
@@ -304,6 +387,14 @@
                    MOVE 'NO OLDER ENTRIES' TO MSGO
                    MOVE 'Y' TO WS-ALARM.
        3200-EXIT.
+           EXIT.
+
+       3210-FIRST-PAGE.
+           IF CA-MONTH = SPACES
+               MOVE 'THIS IS THE NEWEST PAGE' TO MSGO
+           ELSE
+               MOVE WS-FIRSTMSG TO MSGO.
+       3210-EXIT.
            EXIT.
 
       *    ANY OTHER KEY: SHOW THE SAME PAGE AGAIN
@@ -361,6 +452,7 @@
            ELSE
                MOVE IM-STATUS TO STATO.
            MOVE CA-PAGE TO PAGEO.
+           MOVE CA-MONTH TO MONTHO.
        4100-EXIT.
            EXIT.
 
@@ -439,16 +531,22 @@
                MOVE IJ-TYPE TO JL-TYPE.
            MOVE IJ-DEBIT TO JL-DEBIT.
            MOVE IJ-CREDIT TO JL-CREDIT.
-           MOVE ZERO TO WS-EFFECT.
-           IF IJ-CREDIT = '2100'
-               MOVE IJ-AMOUNT TO WS-EFFECT.
-           IF IJ-DEBIT = '2100'
-               SUBTRACT IJ-AMOUNT FROM ZERO GIVING WS-EFFECT.
+           PERFORM 4400-EFFECT THRU 4400-EXIT.
            MOVE WS-EFFECT TO JL-AMOUNT.
            MOVE WS-RUNBAL TO JL-BAL.
            MOVE JL-LINE TO WS-LINE (WS-I).
            SUBTRACT WS-EFFECT FROM WS-RUNBAL.
        4300-EXIT.
+           EXIT.
+
+      *    THE EFFECT OF THE ENTRY ON THE BALANCE OF THE ACCOUNT
+       4400-EFFECT.
+           MOVE ZERO TO WS-EFFECT.
+           IF IJ-CREDIT = '2100'
+               MOVE IJ-AMOUNT TO WS-EFFECT.
+           IF IJ-DEBIT = '2100'
+               SUBTRACT IJ-AMOUNT FROM ZERO GIVING WS-EFFECT.
+       4400-EXIT.
            EXIT.
 
       *****************************************************************

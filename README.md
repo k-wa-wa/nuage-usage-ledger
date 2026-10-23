@@ -2,6 +2,7 @@
 
 おうちクラスタ (nuage) の資源使用量を、メインフレーム (MVS 3.8j on Hercules) が勘定として記帳・残高管理する
 システム。毎朝、前日の使用量を換算単位 RU に換算して元帳に記帳し、昔ながらの帳票 (1403 ラインプリンタ形式) に印字する。
+月が替わると前月を締め、勘定元帳を印字して仕訳を月ごとに保存する。
 勘定の残高と仕訳は、KICKS (CICS 互換) の 3270 画面で照会できる。課金はしない。
 
 設計は [docs/design.md](./docs/design.md) を参照する。**勘定系の作法 (業務日付・締め・元帳の世代管理・複式の仕訳・試算表など) を、
@@ -26,10 +27,18 @@
  │   POSTING  COBOL: 旧元帳(0) + 取引 → 新元帳(+1)、試算表で検証       │
  │   COMMIT        : 全ステップ正常のときだけ新世代と業務日付を確定    │
  │   → 未登録リスト・勘定残高明細・超過通知・試算表を帳票プリンタへ   │
+ │   MONTHLY       : LEDGMON を内部リーダで投入                       │
+ │                                                                   │
+ │ LEDGMON (月次締め。締める月が無ければ何もしない)                   │
+ │   MONSEL   COBOL: 前月の日次締めが済んでいれば、前月の仕訳を抜く   │
+ │   SORT                                                            │
+ │   ACCTLDG  COBOL: 勘定元帳、勘定マスタ・統制勘定と照合             │
+ │   COMMIT        : 仕訳保存ファイル(+1)・月末残高(+1)・業務日付     │
+ │   → 勘定元帳・月次残高表を帳票プリンタへ                           │
  │   ONLINE        : LEDGINQ を内部リーダで投入                       │
  │                                                                   │
  │ LEDGINQ (照会用ファイルの作成)                                     │
- │   勘定マスタ(0) と仕訳の全世代 → 照会用の VSAM (KSDS)              │
+ │   勘定マスタ(0)、仕訳保存ファイルと仕訳の全世代 → 照会用の VSAM    │
  │                                                                   │
  │ TSO + KICKS (オンライン照会。照会専用)                             │
  │   EXEC 'NUAGE.USAGE.CLIST(LEDGER)'                                │
@@ -49,7 +58,10 @@
 | `mvs/POSTING.cbl` | 記帳 (元帳の更新・仕訳・総勘定元帳・検証・帳票) |
 | `mvs/cntl/RATES` | 換算表マスタ (`NUAGE.USAGE.CNTL(RATES)`) |
 | `mvs/cntl/ACCTDEF` | 勘定マスタ定義 (`NUAGE.USAGE.CNTL(ACCTDEF)`)。勘定の追加・割当額の変更はここで行う |
-| `mvs/LEDGINQ.jcl` / `mvs/INQBLD.cbl` | 照会用ファイルの作成 (締めの後に LEDGER が投入する) |
+| `mvs/LEDGMON.jcl` | 月次締めのジョブネット (日次締めの後に LEDGER が投入する)。`{{MONSEL}}` `{{ACCTLDG}}` にソースが差し込まれる |
+| `mvs/MONSEL.cbl` | 締める月を決め、その月と後の仕訳を抜き出す |
+| `mvs/ACCTLDG.cbl` | 勘定元帳・月次残高表の印字、勘定マスタ・統制勘定との照合、仕訳保存ファイルと月末残高の作成 |
+| `mvs/LEDGINQ.jcl` / `mvs/INQBLD.cbl` | 照会用ファイルの作成 (月次締めの後に LEDGMON が投入する) |
 | `mvs/online/LLSTPGM.cbl` / `LLSTSET.bms` | オンラインの勘定一覧 (トランザクション LLST) のプログラムと画面 (BMS マップ) |
 | `mvs/online/LBALPGM.cbl` / `LBALSET.bms` | オンラインの勘定照会 (トランザクション LBAL) のプログラムと画面 |
 | `mvs/online/KIK*LG.asm` | KICKS の表 (SIT・PCT・PPT・FCT。接尾辞 LG) |
@@ -83,8 +95,9 @@ nuage-cluster 側で `nix flake update nuage-usage-ledger --flake ./nix` を実�
 ## 運用
 
 ```bash
-# 手動で締める / 日次使用量明細を出す
+# 手動で締める / 月次締めを流し直す / 日次使用量明細を出す
 ssh mainframe "mvs-console \"/S RUNJOB,M=LEDGER,L='NUAGE.USAGE.JCLLIB'\""
+ssh mainframe "mvs-console \"/S RUNJOB,M=LEDGMON,L='NUAGE.USAGE.JCLLIB'\""
 ssh mainframe "mvs-console \"/S RUNJOB,M=USAGERPT,L='NUAGE.USAGE.JCLLIB'\""
 
 # 帳票の PDF (tmpfs のため LXC の再起動で消える)
@@ -123,6 +136,8 @@ PF3 で終え、CLEAR で消した画面に `LLST` / `LBAL` を打てば再開�
 ```
 
 仕訳の行の残高は、その仕訳の後の残高である (勘定マスタの残高から新しい順にさかのぼって計算する)。
+FROM MONTH に年月 (`202610`) を打って Enter を押すと、その月の末日以前の仕訳から出す。
+仕訳は記帳を始めた日から全部ある (月次締めの済んだ月は仕訳保存ファイルから、まだの月は日次の仕訳から写す)。
 
 - 照会専用である。元帳は締めだけが更新し、照会用ファイルはその写し (照会基準日 = 最終締め日)
 - 締めの後の LEDGINQ は、KICKS で照会中の利用者がいると失敗する。サインオフ (KSSF) してから流し直す
@@ -131,6 +146,8 @@ PF3 で終え、CLEAR で消した画面に `LLST` / `LBAL` を打てば再開�
 ### 締めとマスタの保守
 
 - 締めが失敗したとき: 業務日付は進んでいないので、原因を直して同じジョブを流し直せばよい
+- 月次締め (LEDGMON) が RC 16 で止まったとき: 照合の不一致か、締める月がすでに仕訳保存ファイルにある (確定の途中の失敗)。
+  後者は、仕訳保存ファイル (0) と月末残高 (0) を消すか、業務日付の 19-24 桁目 (最終月次締め月) を手で進める (design.md 6.4)
 - 勘定を足す: `mvs/cntl/ACCTDEF` に次の番号で行を足す (番号順を保つ)。次の締めで開設され、週次割当額が 1 回分記帳される
 - 換算率を変える: `mvs/cntl/RATES` に新しい有効開始日の行を足す (過去の行は変えない)
 
@@ -211,7 +228,7 @@ PF3 で終え、CLEAR で消した画面に `LLST` / `LBAL` を打てば再開�
 | 項目 | 内容 |
 | :-- | :-- |
 | CI | GitHub Actions で MVS/CE の Docker イメージを立ち上げ、固定データでジョブを流して COND CODE と帳票を検証する |
-| 帳票 | 勘定元帳 (勘定ごとの取引明細)、週次・月次の推移 |
+| 帳票 | 週次・月次の推移 (月末残高 `NUAGE.USAGE.MONBAL` を使う。勘定元帳は実装済み) |
 | オンライン | 勘定間の割当の振替 (オンラインの更新。照会は実装済み) |
 | HOST 区分の対象 | mainframe と swfs-cluster が `external-nodes` に入っていない (nuage-monitoring-stack 側で足す) |
 | 権限 | バッチ専用の利用者を作り、既定の利用者への ALTER の許可をやめる |

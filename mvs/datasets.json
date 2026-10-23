@@ -52,6 +52,26 @@
     "dcb": "(RECFM=FB,LRECL=80,BLKSIZE=800)"
   },
   {
+    "dsn": "NUAGE.USAGE.JRNLHIST",
+    "type": "GDG",
+    "limit": 255,
+    "model": "NUAGE.USAGE.GDGMODEL",
+    "unit": "3380",
+    "volser": "PUB000",
+    "space": "(TRK,(5,5))",
+    "dcb": "(RECFM=FB,LRECL=80,BLKSIZE=800)"
+  },
+  {
+    "dsn": "NUAGE.USAGE.MONBAL",
+    "type": "GDG",
+    "limit": 255,
+    "model": "NUAGE.USAGE.GDGMODEL",
+    "unit": "3380",
+    "volser": "PUB000",
+    "space": "(TRK,(1,1))",
+    "dcb": "(RECFM=FB,LRECL=80,BLKSIZE=800)"
+  },
+  {
     "dsn": "NUAGE.USAGE.GL",
     "type": "GDG",
     "limit": 35,

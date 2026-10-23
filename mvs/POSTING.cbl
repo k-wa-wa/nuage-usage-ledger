@@ -8,6 +8,9 @@
       *         OLDMAST  - ACCOUNT MASTER (SUBSIDIARY LEDGER), GEN 0  *
       *         TRANS    - TRANSACTIONS, SORTED BY ACCOUNT, DATE, TYPE*
       *         OLDGL    - GENERAL LEDGER, GENERATION 0               *
+      *         OLDBIZ   - BUSINESS DATES. COLUMNS 18-80 (THE LAST    *
+      *                    MONTHLY CLOSING) ARE CARRIED OVER AS THEY  *
+      *                    ARE                                        *
       * OUTPUT: NEWMAST  - ACCOUNT MASTER, NEXT GENERATION            *
       *         JOURNAL  - JOURNAL ENTRIES OF THIS RUN                *
       *         NEWGL    - GENERAL LEDGER, NEXT GENERATION            *
@@ -43,6 +46,7 @@
            SELECT NEWMAST-FILE ASSIGN TO UT-S-NEWMAST.
            SELECT JRNL-FILE    ASSIGN TO UT-S-JOURNAL.
            SELECT NEWGL-FILE   ASSIGN TO UT-S-NEWGL.
+           SELECT OLDBIZ-FILE  ASSIGN TO UT-S-OLDBIZ.
            SELECT BIZ-FILE     ASSIGN TO UT-S-NEWBIZ.
            SELECT REPORT-FILE  ASSIGN TO UT-S-REPORT.
        DATA DIVISION.
@@ -159,15 +163,25 @@
            05  NG-DEBIT            PIC S9(11) COMP-3.
            05  NG-CREDIT           PIC S9(11) COMP-3.
            05  FILLER              PIC X(48).
+       FD  OLDBIZ-FILE
+           LABEL RECORDS ARE STANDARD
+           BLOCK CONTAINS 0 RECORDS
+           RECORD CONTAINS 80 CHARACTERS
+           DATA RECORD IS OB-REC.
+       01  OB-REC.
+           05  FILLER              PIC X(17).
+           05  OB-REST             PIC X(63).
        FD  BIZ-FILE
            LABEL RECORDS ARE STANDARD
            RECORD CONTAINS 80 CHARACTERS
            DATA RECORD IS BIZ-REC.
+      *    1-8 NEXT BUSINESS DATE, 10-17 LAST CLOSED DATE (THIS PROGRAM)
+      *    19-24 LAST CLOSED MONTH (MONTHLY CLOSING, ACCTLDG)
        01  BIZ-REC.
            05  B-NEXT              PIC X(8).
            05  FILLER              PIC X.
            05  B-LAST              PIC X(8).
-           05  FILLER              PIC X(63).
+           05  B-REST              PIC X(63).
        FD  REPORT-FILE
            LABEL RECORDS ARE OMITTED
            RECORD CONTAINS 133 CHARACTERS
@@ -422,7 +436,7 @@
        PROCEDURE DIVISION.
        MAIN-LINE.
            OPEN INPUT CTL-FILE ACCT-FILE OLDMAST-FILE TRAN-FILE
-                      OLDGL-FILE
+                      OLDGL-FILE OLDBIZ-FILE
                 OUTPUT NEWMAST-FILE JRNL-FILE NEWGL-FILE BIZ-FILE
                        REPORT-FILE.
            PERFORM LOAD-CTL THRU LOAD-CTL-EXIT.
@@ -442,7 +456,7 @@
            PERFORM WRITE-GL THRU WRITE-GL-EXIT.
            PERFORM WRITE-BIZ THRU WRITE-BIZ-EXIT.
            CLOSE CTL-FILE ACCT-FILE OLDMAST-FILE TRAN-FILE OLDGL-FILE
-                 NEWMAST-FILE JRNL-FILE NEWGL-FILE BIZ-FILE
+                 OLDBIZ-FILE NEWMAST-FILE JRNL-FILE NEWGL-FILE BIZ-FILE
                  REPORT-FILE.
            DISPLAY 'POSTING ACCOUNTS     ' WS-ACCT-CNT.
            DISPLAY 'POSTING TRANSACTIONS ' WS-TRAN-CNT.
@@ -797,9 +811,11 @@
        WRITE-GL-ONE-EXIT.
            EXIT.
        WRITE-BIZ.
+           READ OLDBIZ-FILE AT END MOVE SPACES TO OB-REC.
            MOVE SPACES TO BIZ-REC.
            MOVE CTL-NEXT TO B-NEXT.
            MOVE WS-TO-YMD TO B-LAST.
+           MOVE OB-REST TO B-REST.
            WRITE BIZ-REC.
        WRITE-BIZ-EXIT.
            EXIT.

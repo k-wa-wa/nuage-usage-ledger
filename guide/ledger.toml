@@ -22,7 +22,7 @@ description = "使用量勘定の勘定マスタは NUAGE.USAGE.MASTER の一番
 rows = [3, 22]
 cols = [69, 74]
 title = "使用量勘定のレコード長"
-note = "勘定マスタは 100、仕訳・総勘定元帳・業務日付は 80。照会用の勘定マスタは 100、照会用の仕訳は 104 (VSAM)。"
+note = "勘定マスタは 100、仕訳・仕訳保存ファイル・月末残高・総勘定元帳・業務日付は 80。照会用の勘定マスタは 100、照会用の仕訳は 104 (VSAM)。"
 
 [[screen]]
 id = "ledger-tso-welcome"
@@ -125,11 +125,16 @@ match = ['\A\s*LBAL\s+NUAGE USAGE LEDGER  ACCOUNT INQUIRY']
 description = """
 - 勘定の残高と、仕訳を新しい順に 10 件ずつ出す (照会専用)
 - 仕訳の行の残高は、その仕訳を記帳した後の残高
+- FROM MONTH に年月 (202610) を打つと、その月の末日以前の仕訳から出す
 - PF7 / PF8 で仕訳をめくり、PF5 で勘定一覧へ戻る"""
 
 [[screen.action]]
 label = "KUBE-SYSTEM (100-0000005) を照会"
 keys = "{home}{eraseeof}100-0000005{enter}"
+
+[[screen.action]]
+label = "年月から仕訳を出す (FROM MONTH に 202610)"
+keys = "{home}{tab}{eraseeof}202610{enter}"
 
 [[screen.action]]
 label = "古い仕訳 (PF8)"
@@ -151,13 +156,19 @@ keys = "{pf3}"
 rows = [1, 1]
 cols = [55, 79]
 title = "照会基準日"
-note = "照会用ファイルが、どの締め (最終締め日) の時点の元帳の写しか。照会用の仕訳は直近 35 回の締めの分 (仕訳の GDG の世代数) を持つ。"
+note = "照会用ファイルが、どの締め (最終締め日) の時点の元帳の写しか。照会用の仕訳は記帳を始めた日からの全部 (月次締めの済んだ月は仕訳保存ファイル、まだの月は日次の仕訳から写す)。"
 
 [[screen.region]]
 rows = [3, 3]
 cols = [20, 30]
 title = "勘定番号 (入力)"
 note = "勘定番号を打って Enter を押す。1000000005 でも 100-0000005 でもよい。"
+
+[[screen.region]]
+rows = [3, 3]
+cols = [54, 59]
+title = "仕訳を出し始める年月 (入力)"
+note = "YYYYMM (202610)。打つとその月の末日以前の仕訳から出し、その頁を 1 頁目とする。空なら一番新しい仕訳から。頁送りは 50 頁 (500 件) までなので、それより古い仕訳はここで年月を打って出す。"
 
 [[screen.region]]
 rows = [6, 6]
@@ -253,7 +264,17 @@ note = "勘定ごとの残高・割当累計・使用累計 (補助元帳)。日
 [[term]]
 pattern = '\bNUAGE\.USAGE\.JOURNAL(\.G\d{4}V\d{2})?'
 title = "仕訳"
-note = "締めで記帳した仕訳 (借方科目・貸方科目・金額)。締めごとに 1 世代。"
+note = "締めで記帳した仕訳 (借方科目・貸方科目・金額)。締めごとに 1 世代で、35 世代 (約 35 日) で消える。消える前に月次締め (ジョブ LEDGMON) が仕訳保存ファイル (JRNLHIST) に移す。"
+
+[[term]]
+pattern = '\bNUAGE\.USAGE\.JRNLHIST(\.G\d{4}V\d{2})?'
+title = "仕訳保存ファイル"
+note = "月次締め (ジョブ LEDGMON) で 1 か月分の仕訳を移したもの。1 世代 = 1 か月で 255 世代持つ。レコードは仕訳そのままで、勘定番号・日付・連番の順に並ぶ。"
+
+[[term]]
+pattern = '\bNUAGE\.USAGE\.MONBAL(\.G\d{4}V\d{2})?'
+title = "月末残高"
+note = "月次締め (ジョブ LEDGMON) が残す、勘定ごとの前月繰越・増加・減少・次月繰越。1 世代 = 1 か月。次の月の前月繰越はここから取る。"
 
 [[term]]
 pattern = '\bNUAGE\.USAGE\.GL(\.G\d{4}V\d{2})?'
@@ -263,7 +284,7 @@ note = "科目 (1100 割当原資 / 2100 利用者勘定 / 4100 使用量) ご�
 [[term]]
 pattern = '\bNUAGE\.USAGE\.BIZDATE\b'
 title = "業務日付"
-note = "次に締める日と、最後に締めた日。締めが成功したときだけ進む。"
+note = "次に締める日、最後に締めた日と、最後に月次締めした月。締めが成功したときだけ進む。"
 
 [[term]]
 pattern = '\bNUAGE\.USAGE\.CNTL\b'
@@ -273,7 +294,7 @@ note = "料率表 RATES と勘定定義 ACCTDEF をメンバーに持つ。Git (
 [[term]]
 pattern = '\bNUAGE\.USAGE\.JCLLIB\b'
 title = "ジョブのライブラリ (PDS)"
-note = "ジョブ USAGERPT (日次使用量明細) と LEDGER (日次の締め) の JCL。毎朝 ZTIMER が投入する。"
+note = "ジョブ USAGERPT (日次使用量明細)・LEDGER (日次の締め)・LEDGMON (月次締め)・LEDGINQ (照会用ファイルの作成) の JCL。USAGERPT と LEDGER は毎朝 ZTIMER が投入し、LEDGMON と LEDGINQ はその後に続けて投入される。"
 
 [[term]]
 pattern = '\bNUAGE\.USAGE\.GDGMODEL\b'
@@ -288,7 +309,7 @@ note = "オンライン (KICKS) が勘定番号で引く、勘定マスタの写
 [[term]]
 pattern = '\bNUAGE\.USAGE\.INQJRNL(\.DATA|\.INDEX)?\b'
 title = "照会用の仕訳 (VSAM KSDS)"
-note = "オンライン (KICKS) が勘定ごとに新しい順に読む、仕訳の写し (直近 35 回の締めの分)。キーは勘定番号 + 反転した日付 + 反転した連番。ジョブ LEDGINQ が作り直す。"
+note = "オンライン (KICKS) が勘定ごとに新しい順に読む、仕訳の写し (記帳を始めた日からの全部)。キーは勘定番号 + 反転した日付 + 反転した連番。ジョブ LEDGINQ が作り直す。"
 
 [[term]]
 pattern = '\bNUAGE\.USAGE\.CLIST\b'
@@ -303,7 +324,12 @@ note = "KICKS の利用者ライブラリの形 (TSOID.KICKS.V1R5M0.*)。SKIKLOA
 [[term]]
 pattern = '\bLEDGINQ\b'
 title = "ジョブ LEDGINQ (照会用ファイルの作成)"
-note = "締め (LEDGER) が成功すると内部リーダで投入される。勘定マスタと仕訳を照会用の VSAM に写す。KICKS で照会中だと失敗するので、サインオフ (KSSF) してから流し直す。"
+note = "月次締め (LEDGMON) の最後に内部リーダで投入される。勘定マスタと、仕訳保存ファイル・仕訳を照会用の VSAM に写す。KICKS で照会中だと失敗するので、サインオフ (KSSF) してから流し直す。"
+
+[[term]]
+pattern = '\bLEDGMON\b'
+title = "ジョブ LEDGMON (月次締め)"
+note = "日次の締め (LEDGER) が成功すると内部リーダで投入される。前月の日次締めが済んでいれば前月を締める (勘定元帳・月次残高表の印字、仕訳保存ファイルと月末残高の新しい世代)。締める月が無ければ RC 4 で何もしない。最後に LEDGINQ を投入する。"
 
 [[term]]
 pattern = '\bLEDGBLD\b'
@@ -312,7 +338,7 @@ note = "KICKS の表・マップ・プログラムをアセンブル・コンパ
 
 # ---------------------------------------------------------------- レコード定義
 # ブラウズ画面でマウス位置の桁が何の項目かを出し、16 進表示なら値を読む。
-# 定義の出典は mvs/POSTING.cbl (COBOL のレコード定義)。レコードを変えたら合わせて変える。
+# 定義の出典は mvs/POSTING.cbl と mvs/ACCTLDG.cbl (COBOL のレコード定義)。レコードを変えたら合わせて変える。
 # dataset は世代 (.G0001V00) とメンバー名 ((RATES)) を除いた名前に当てる。
 # kind: char (文字) / zoned (数字の文字) / packed (パック 10 進数 COMP-3)
 
@@ -448,6 +474,92 @@ name = "次に締める日 (B-NEXT)"
 [[layout.field]]
 cols = [10, 17]
 name = "最後に締めた日 (B-LAST)"
+
+[[layout.field]]
+cols = [19, 24]
+name = "最後に月次締めした月 (B-MONTH)"
+note = "YYYYMM。月次締め (ACCTLDG) が書き、日次の締め (POSTING) はそのまま写す。照会用ファイルの作成は、この月までの仕訳を仕訳保存ファイルから取る。"
+
+[[layout]]
+dataset = 'NUAGE\.USAGE\.JRNLHIST'
+title = "仕訳保存ファイルのレコード (80 バイト)"
+
+[[layout.field]]
+cols = [1, 8]
+name = "日付 (J-DATE)"
+note = "ここから 80 バイトは仕訳のレコードそのまま (並びが勘定番号・日付・連番の順)。"
+
+[[layout.field]]
+cols = [9, 14]
+name = "連番 (J-SEQ)"
+kind = "zoned"
+
+[[layout.field]]
+cols = [15, 18]
+name = "借方科目 (J-DEBIT)"
+
+[[layout.field]]
+cols = [19, 22]
+name = "貸方科目 (J-CREDIT)"
+
+[[layout.field]]
+cols = [23, 32]
+name = "勘定番号 (J-ACCT)"
+
+[[layout.field]]
+cols = [33, 33]
+name = "種別 (J-TYPE)"
+note = "O = 開設時の割当、A = 週次の割当、U = 使用。"
+
+[[layout.field]]
+cols = [34, 44]
+name = "金額 (J-AMOUNT)"
+kind = "zoned"
+
+[[layout.field]]
+cols = [45, 80]
+name = "予備 (FILLER)"
+
+[[layout]]
+dataset = 'NUAGE\.USAGE\.MONBAL'
+title = "月末残高のレコード (80 バイト)"
+
+[[layout.field]]
+cols = [1, 10]
+name = "勘定番号 (NB-ACCT)"
+
+[[layout.field]]
+cols = [11, 16]
+name = "年月 (NB-MONTH)"
+note = "YYYYMM。どの月の月末の残高か。"
+
+[[layout.field]]
+cols = [17, 22]
+name = "前月繰越 (NB-PRIOR)"
+kind = "packed"
+note = "PIC S9(11) COMP-3。前月の月末残高の次月繰越。"
+
+[[layout.field]]
+cols = [23, 28]
+name = "増加 (NB-INC)"
+kind = "packed"
+note = "PIC S9(11) COMP-3。その月の割当の合計。"
+
+[[layout.field]]
+cols = [29, 34]
+name = "減少 (NB-DEC)"
+kind = "packed"
+note = "PIC S9(11) COMP-3。その月の使用の合計。"
+
+[[layout.field]]
+cols = [35, 40]
+name = "次月繰越 (NB-CLOSE)"
+kind = "packed"
+note = "PIC S9(11) COMP-3。前月繰越 + 増加 - 減少 = 月末の残高。"
+
+[[layout.field]]
+cols = [41, 80]
+name = "予備 (FILLER)"
 
 [[layout]]
 dataset = 'NUAGE\.USAGE\.INQMAST(\.DATA)?'
