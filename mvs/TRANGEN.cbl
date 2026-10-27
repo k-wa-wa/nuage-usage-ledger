@@ -9,12 +9,21 @@
       *         USAGE    - USAGE RECORDS (DATE, CLASS, NAME, USAGE)   *
       * OUTPUT: TRANS    - TRANSACTIONS, ONE PER RECORD:              *
       *                    U = USAGE OF A DAY, CONVERTED TO RU        *
+      *                        (AGENT: COST IN CENTS OF USD)          *
       *                    A = WEEKLY ALLOCATION (ON MONDAYS)         *
       *         REPORT   - UNREGISTERED USERS (SYSOUT=M)              *
       *                                                               *
-      * CONVERSION: AMOUNT = USAGE * RATE, TRUNCATED TO A WHOLE RU    *
-      * PER RESOURCE. THE RATE IS THE ONE WITH THE LATEST EFFECTIVE   *
-      * DATE NOT AFTER THE USAGE DATE.                                *
+      * THE UNIT OF AN ACCOUNT IS GIVEN BY ITS CLASS CODE (ACCOUNT    *
+      * NO 1-3): 300 (AGENT) IS USD, KEPT IN CENTS. THE OTHERS ARE RU.*
+      *                                                               *
+      * CONVERSION TO RU: AMOUNT = USAGE * RATE, TRUNCATED TO A WHOLE *
+      * RU PER RESOURCE. THE RATE IS THE ONE WITH THE LATEST          *
+      * EFFECTIVE DATE NOT AFTER THE USAGE DATE.                      *
+      * AGENT IS NOT CONVERTED: THE FIRST QUANTITY OF THE USAGE IS    *
+      * THE COST IN USD (9(7)V99), AND AMOUNT = USD * 100 (CENTS).    *
+      *                                                               *
+      * AN ACCOUNT WITH A WEEKLY ALLOCATION OF ZERO GETS NO           *
+      * ALLOCATION TRANSACTION.                                       *
       *                                                               *
       * RETURN CODE 16 IF A RATE OR A TABLE ENTRY IS MISSING.         *
       *****************************************************************
@@ -92,12 +101,19 @@
            BLOCK CONTAINS 10 RECORDS
            RECORD CONTAINS 80 CHARACTERS
            DATA RECORD IS USAGE-REC.
+      *    THE MEANING OF THE QUANTITIES DEPENDS ON THE CLASS:
+      *    K8S, HOST: CPU-H, MEM-GBH, NET-GB, STOR-GB
+      *    AGENT    : COST-USD, 0, 0, 0 (U-USD)
        01  USAGE-REC.
            05  U-DATE              PIC X(8).
            05  U-CLASS             PIC X(5).
            05  U-NAME              PIC X(24).
            05  U-QTY               PIC 9(7)V99 OCCURS 4 TIMES.
            05  FILLER              PIC X(7).
+       01  USAGE-AGENT.
+           05  FILLER              PIC X(37).
+           05  U-USD               PIC 9(7)V99.
+           05  FILLER              PIC X(34).
        FD  TRAN-FILE
            LABEL RECORDS ARE STANDARD
            BLOCK CONTAINS 10 RECORDS
@@ -131,6 +147,9 @@
        77  WS-USAGE-CNT            PIC 9(6)  VALUE ZERO.
        77  WS-ALLOT-CNT            PIC 9(6)  VALUE ZERO.
        77  WS-UNREG-CNT            PIC 9(6)  VALUE ZERO.
+       01  WS-ACCT-SPLIT.
+           05  WS-ACCT-CLS         PIC X(3).
+           05  WS-ACCT-SER         PIC X(7).
       *
       * RESOURCE CODES IN THE ORDER OF THE USAGE FIELDS
       *
@@ -186,7 +205,7 @@
            05  FILLER              PIC X(45)
                    VALUE ' DATE      CLASS  NAME'.
            05  FILLER              PIC X(87) VALUE
-               '    CPU-H       MEM-GBH        NET-GB       STOR-GB'.
+               'CPU-H/USD       MEM-GBH        NET-GB       STOR-GB'.
        01  DETAIL-LINE.
            05  FILLER              PIC X     VALUE SPACE.
            05  FILLER              PIC X     VALUE SPACE.
@@ -210,6 +229,11 @@
            05  FILLER              PIC X(5)  VALUE SPACES.
            05  E-COUNT             PIC ZZZ,ZZ9.
            05  FILLER              PIC X(98) VALUE ' UNREGISTERED'.
+       01  NOTE-LINE.
+           05  FILLER              PIC X     VALUE SPACE.
+           05  FILLER              PIC X(60) VALUE
+               ' CLASS AGENT: THE FIRST COLUMN IS THE COST IN USD'.
+           05  FILLER              PIC X(72) VALUE SPACES.
        PROCEDURE DIVISION.
        MAIN-LINE.
            OPEN INPUT CTL-FILE RATE-FILE ACCT-FILE USAGE-FILE
@@ -311,10 +335,15 @@
            MOVE 'U' TO T-TYPE.
            MOVE AC-NAME (WS-I) TO T-NAME.
            MOVE AC-CLASS (WS-I) TO T-CLASS.
+           MOVE AC-NO (WS-I) TO WS-ACCT-SPLIT.
+           IF WS-ACCT-CLS = '300'
+               PERFORM CONVERT-USD THRU CONVERT-USD-EXIT
+               GO TO CONVERT-USAGE-WRITE.
            MOVE ZERO TO WS-TOTAL.
            PERFORM CONVERT-RESOURCE THRU CONVERT-RESOURCE-EXIT
                VARYING WS-J FROM 1 BY 1 UNTIL WS-J > 4.
            MOVE WS-TOTAL TO T-AMOUNT.
+       CONVERT-USAGE-WRITE.
            WRITE TRAN-REC.
            ADD 1 TO WS-USAGE-CNT.
        CONVERT-USAGE-NEXT.
@@ -325,6 +354,18 @@
            IF AC-CLASS (WS-I) = U-CLASS AND AC-NAME (WS-I) = U-NAME
                MOVE 'Y' TO WS-FOUND.
        FIND-ACCT-EXIT.
+           EXIT.
+      *
+      * AGENT (USD): NOT CONVERTED. THE AMOUNT IS THE COST IN CENTS.
+      * THE QUANTITIES ARE KEPT AS THEY ARE (USD, 0, 0, 0).
+      *
+       CONVERT-USD.
+           MOVE U-QTY (1) TO T-QTY (1).
+           MOVE U-QTY (2) TO T-QTY (2).
+           MOVE U-QTY (3) TO T-QTY (3).
+           MOVE U-QTY (4) TO T-QTY (4).
+           COMPUTE T-AMOUNT = U-USD * 100.
+       CONVERT-USD-EXIT.
            EXIT.
       *
       * RESOURCE WS-J: PICK THE RATE AND ADD THE TRUNCATED AMOUNT
@@ -355,7 +396,8 @@
            EXIT.
       *
       * WEEKLY ALLOCATION: AN A TRANSACTION FOR EVERY ACCOUNT ON EVERY
-      * MONDAY OF THE PERIOD
+      * MONDAY OF THE PERIOD, EXCEPT THE ACCOUNTS WITHOUT ALLOCATION
+      * (ZERO). THE AMOUNT IS IN THE UNIT OF THE ACCOUNT (RU OR CENTS).
       *
        MAKE-ALLOTS.
            PERFORM MAKE-ALLOTS-DAY THRU MAKE-ALLOTS-DAY-EXIT
@@ -370,6 +412,8 @@
        MAKE-ALLOTS-DAY-EXIT.
            EXIT.
        MAKE-ALLOT.
+           IF AC-ALLOT (WS-I) = ZERO
+               GO TO MAKE-ALLOT-EXIT.
            MOVE AC-NO (WS-I) TO T-ACCT.
            MOVE DY-DATE (WS-J) TO T-DATE.
            MOVE 'A' TO T-TYPE.
@@ -410,6 +454,7 @@
                MOVE 'NO UNREGISTERED USERS' TO M-TEXT
                MOVE SPACES TO M-VALUE
                WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 1 LINES.
+           WRITE REPORT-REC FROM NOTE-LINE AFTER ADVANCING 2 LINES.
            MOVE WS-UNREG-CNT TO E-COUNT.
            WRITE REPORT-REC FROM END-LINE AFTER ADVANCING 3 LINES.
        PRINT-FOOTER-EXIT.

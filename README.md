@@ -2,6 +2,7 @@
 
 おうちクラスタ (nuage) の資源使用量を、メインフレーム (MVS 3.8j on Hercules) が勘定として記帳・残高管理する
 システム。毎朝、前日の使用量を換算単位 RU に換算して元帳に記帳し、昔ながらの帳票 (1403 ラインプリンタ形式) に印字する。
+AI agent の推定コスト (USD) も、リポジトリごとの勘定として同じ締めで記帳する (RU には換算せず、単位ごとに科目と試算表を分ける)。
 月が替わると前月を締め、勘定元帳を印字して仕訳を月ごとに保存する。
 勘定の残高と仕訳は、KICKS (CICS 互換) の 3270 画面で照会できる。課金はしない。
 
@@ -23,6 +24,7 @@
  │ LEDGER (日次締めのジョブネット)                                    │
  │   GET      REXX : 業務日付から前日までの使用量を HTTP で取る        │
  │   TRANGEN  COBOL: RU に換算して取引を作る (月曜は週次割当も)        │
+ │                   AI agent のコストは換算せず USD (セント) のまま │
  │   SORT                                                            │
  │   POSTING  COBOL: 旧元帳(0) + 取引 → 新元帳(+1)、試算表で検証       │
  │   COMMIT        : 全ステップ正常のときだけ新世代と業務日付を確定    │
@@ -54,8 +56,8 @@
 | `mvs/USAGEGET.rexx` | データ取得 (REXX)。VictoriaMetrics に PromQL を投げ、固定長レコードを書く。両方のジョブで使う |
 | `mvs/USAGERPT.jcl` / `mvs/USAGERPT.cbl` | 日次使用量明細のジョブと帳票プログラム |
 | `mvs/LEDGER.jcl` | 日次締めのジョブネット。`{{USAGEGET}}` `{{TRANGEN}}` `{{POSTING}}` にソースが差し込まれる |
-| `mvs/TRANGEN.cbl` | 取引作成 (換算・週次割当・未登録リスト) |
-| `mvs/POSTING.cbl` | 記帳 (元帳の更新・仕訳・総勘定元帳・検証・帳票) |
+| `mvs/TRANGEN.cbl` | 取引作成 (換算・週次割当・未登録リスト)。AI agent のコスト (区分 AGENT) は換算せず、セントの金額にする |
+| `mvs/POSTING.cbl` | 記帳 (元帳の更新・仕訳・総勘定元帳・検証・帳票)。検証と合計は単位 (RU・USD) ごと |
 | `mvs/cntl/RATES` | 換算表マスタ (`NUAGE.USAGE.CNTL(RATES)`) |
 | `mvs/cntl/ACCTDEF` | 勘定マスタ定義 (`NUAGE.USAGE.CNTL(ACCTDEF)`)。勘定の追加・割当額の変更はここで行う |
 | `mvs/LEDGMON.jcl` | 月次締めのジョブネット (日次締めの後に LEDGER が投入する)。`{{MONSEL}}` `{{ACCTLDG}}` にソースが差し込まれる |
@@ -72,7 +74,8 @@
 | `mvs/datasets.json` | このアプリが使うデータセット (無ければ作られる。PO / PS / GDG。照会用の VSAM は LEDGINQ が作る) |
 | `guide/ledger.toml` | 3270 端末の案内 [cicerone3270](https://github.com/k-wa-wa/cicerone3270) に足す辞書。オンラインの画面 (LLST・LBAL) の説明、データセットの説明と、勘定マスタ・仕訳・総勘定元帳・業務日付・照会用ファイルのレコード定義 (ブラウズ画面で項目名と値を出す) |
 | `flake.nix` | 上をまとめて、nuage-cluster に渡す資材を作る |
-| `scripts/check_mvs_sources.py` | カード (80 桁) と MVS の制約の検査 (`nix flake check`) |
+| `scripts/check_mvs_sources.py` | カード (80 桁) と MVS の制約、ACCTDEF・RATES の書式の検査 (`nix flake check`) |
+| `tests/` | USAGEGET を Linux 上の REXX で確かめる検査 (`nix flake check`) と、手元の MVS で締めを試しの使用量で流す道具。[tests/README.md](./tests/README.md) |
 
 ## nuage-cluster との約束事
 
@@ -148,12 +151,14 @@ FROM MONTH に年月 (`202610`) を打って Enter を押すと、その月の�
 - 締めが失敗したとき: 業務日付は進んでいないので、原因を直して同じジョブを流し直せばよい
 - 月次締め (LEDGMON) が RC 16 で止まったとき: 照合の不一致か、締める月がすでに仕訳保存ファイルにある (確定の途中の失敗)。
   後者は、仕訳保存ファイル (0) と月末残高 (0) を消すか、業務日付の 19-24 桁目 (最終月次締め月) を手で進める (design.md 6.4)
-- 勘定を足す: `mvs/cntl/ACCTDEF` に次の番号で行を足す (番号順を保つ)。次の締めで開設され、週次割当額が 1 回分記帳される
+- 勘定を足す: `mvs/cntl/ACCTDEF` に次の番号で行を足す (番号順を保つ)。次の締めで開設され、週次割当額が 1 回分記帳される。
+  週次割当額は勘定の単位 (RU、AGENT はセント) で書く。0 なら割当をしない (今の AGENT の勘定)
 - 換算率を変える: `mvs/cntl/RATES` に新しい有効開始日の行を足す (過去の行は変えない)
 
 ## 使用量の項目 (仮置き)
 
-区分 K8S は namespace ごと、区分 HOST は VictoriaMetrics の `job="external-nodes"` の NixOS ホストごと
+区分 K8S は namespace ごと、区分 HOST は VictoriaMetrics の `job="external-nodes"` の NixOS ホストごと、
+区分 AGENT は AI agent を動かしたリポジトリ (`repo` ラベル) ごと
 (名前は `node_uname_info` の `nodename`)。評価時刻は対象日の翌日 0:00 (JST) で、`[1d]` の窓が対象日の 0:00〜24:00 になる。
 
 | 列 | 意味 | K8S | HOST |
@@ -163,14 +168,17 @@ FROM MONTH に年月 (`202610`) を打って Enter を押すと、その月の�
 | NET-GB | 通信量 (受信 + 送信) | `container_network_*_bytes_total` の増分 | `node_network_*_bytes_total` (lo を除く) の増分 |
 | STOR-GB | ストレージ | PVC の要求量 (日末時点) | `/` の使用量 (日末時点) |
 
+区分 AGENT は 1 つ目の列だけを使い (残りは 0)、`sum by (repo) (increase(nuage_ai_agent_cost_usd_total[1d]))` の USD を入れる。
+nuage-cluster の collector が API の単価で見積もった推定額である。取り込むときにセント未満を四捨五入する。
+
 ### 使用量レコード (REXX → SORT → COBOL)
 
 | 桁 | 内容 | COBOL の定義 |
 | :-- | :-- | :-- |
 | 1-8 | 日付 (YYYYMMDD) | `PIC X(8)` |
-| 9-13 | 区分 (`K8S  ` / `HOST `) | `PIC X(5)` |
+| 9-13 | 区分 (`K8S  ` / `HOST ` / `AGENT`) | `PIC X(5)` |
 | 14-37 | 名前 (大文字) | `PIC X(24)` |
-| 38-73 | CPU-H, MEM-GBH, NET-GB, STOR-GB を各 9 桁 (下 2 桁が小数) | `PIC 9(7)V99` × 4 |
+| 38-73 | CPU-H, MEM-GBH, NET-GB, STOR-GB を各 9 桁 (下 2 桁が小数)。AGENT は COST-USD, 0, 0, 0 | `PIC 9(7)V99` × 4 |
 | 74-80 | 予備 | `PIC X(7)` |
 
 元帳側のレコードは [docs/design.md](./docs/design.md) の 5.1 にある。

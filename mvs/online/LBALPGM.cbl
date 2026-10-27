@@ -26,8 +26,13 @@
       *       PF7 / PF8 = NEWER / OLDER ENTRIES, PF3 OR CLEAR = END   *
       *                                                               *
       * THE BALANCE AFTER EACH ENTRY IS COMPUTED BACKWARDS FROM THE   *
-      * BALANCE OF THE MASTER: AN ENTRY CREDITING 2100 (ALLOCATION)   *
-      * RAISED THE BALANCE, ONE DEBITING 2100 (USAGE) LOWERED IT.     *
+      * BALANCE OF THE MASTER: AN ENTRY CREDITING THE USER ACCOUNTS   *
+      * (2100 RU, 2200 USD) RAISED THE BALANCE (ALLOCATION), ONE      *
+      * DEBITING THEM LOWERED IT (USAGE).                             *
+      *                                                               *
+      * AMOUNTS ARE IN THE UNIT OF THE ACCOUNT: RU, OR USD IN DOLLARS *
+      * AND CENTS FOR CLASS CODE 300 (AGENT). AN ACCOUNT NEVER        *
+      * ALLOCATED (ALLOCATED TOTAL ZERO) IS NOT OVERDRAWN.            *
       *****************************************************************
        ENVIRONMENT DIVISION.
        DATA DIVISION.
@@ -38,7 +43,8 @@
        77  WS-END                  PIC X.
        77  WS-RUNBAL               PIC S9(11) COMP-3.
        77  WS-EFFECT               PIC S9(11) COMP-3.
-       77  WS-EDIT                 PIC ---,---,---,--9.
+      *    UNIT OF THE ACCOUNT SHOWN: 1 = RU, 2 = USD
+       77  WS-U                    PIC 9.
       *    LENGTH OF CA-AREA. ANY OTHER COMMAREA (NONE, OR WHAT KICKS
       *    GIVES THE FIRST TRANSACTION AT STARTUP) IS A FIRST TIME.
        77  WS-CA-LEN               PIC S9(4) COMP VALUE +1549.
@@ -46,6 +52,16 @@
            'LBAL ENDED. TYPE LLST, LBAL OR KSSF (SIGN OFF).'.
        77  WS-FIRSTMSG             PIC X(60) VALUE
            'FIRST PAGE OF THE MONTH. BLANK THE MONTH FOR THE NEWEST'.
+      *
+      * AN AMOUNT TO SHOW (WS-AMT): RU AS IT IS (WS-EDIT), USD IN
+      * DOLLARS (WS-EDIT-U). FOR USD THE SAME 6 BYTES READ WITH TWO
+      * DECIMALS ARE CENTS / 100.
+      *
+       01  WS-AMT                  PIC S9(11) COMP-3.
+       01  WS-AMT-USD REDEFINES WS-AMT PIC S9(9)V99 COMP-3.
+       01  WS-EDITS.
+           05  WS-EDIT             PIC ---,---,---,--9.
+           05  WS-EDIT-U REDEFINES WS-EDIT PIC ----,---,--9.99.
       *
       * COMMAREA
       *
@@ -161,8 +177,10 @@
            05  JL-CREDIT           PIC X(4).
            05  FILLER              PIC X(2)  VALUE SPACES.
            05  JL-AMOUNT           PIC ---,---,---,--9.
+           05  JL-AMOUNT-U REDEFINES JL-AMOUNT PIC ----,---,--9.99.
            05  FILLER              PIC X(3)  VALUE SPACES.
            05  JL-BAL              PIC ---,---,---,--9.
+           05  JL-BAL-U REDEFINES JL-BAL PIC ----,---,--9.99.
        01  WS-LINES.
            05  WS-LINE             PIC X(77) OCCURS 10 TIMES.
 
@@ -430,13 +448,26 @@
            MOVE WS-ACCT-SHOW TO ACCTO.
            MOVE IM-CLASS TO CLASSO.
            MOVE IM-NAME TO NAMEO.
-           MOVE IM-BAL TO WS-EDIT.
+      *    THE UNIT OF THE ACCOUNT
+           IF IM-ACCT-CLS = '300'
+               MOVE 2 TO WS-U
+               MOVE 'USD' TO BUNITO AUNITO UUNITO
+               MOVE '(USD)' TO JUNIT1O JUNIT2O
+           ELSE
+               MOVE 1 TO WS-U
+               MOVE 'RU' TO BUNITO AUNITO UUNITO
+               MOVE ' (RU)' TO JUNIT1O JUNIT2O.
+           MOVE IM-BAL TO WS-AMT.
+           PERFORM 7200-EDIT THRU 7200-EXIT.
            MOVE WS-EDIT TO BALO.
-           IF IM-BAL < ZERO
+      *    AN ACCOUNT NEVER ALLOCATED IS NOT OVERDRAWN
+           IF IM-BAL < ZERO AND IM-ALLOC NOT = ZERO
                MOVE '*** OVERDRAWN ***' TO OVERO.
-           MOVE IM-ALLOC TO WS-EDIT.
+           MOVE IM-ALLOC TO WS-AMT.
+           PERFORM 7200-EDIT THRU 7200-EXIT.
            MOVE WS-EDIT TO ALLOCO.
-           MOVE IM-USED TO WS-EDIT.
+           MOVE IM-USED TO WS-AMT.
+           PERFORM 7200-EDIT THRU 7200-EXIT.
            MOVE WS-EDIT TO USEDO.
            MOVE IM-OPENED TO WS-YMD.
            PERFORM 7100-DATE THRU 7100-EXIT.
@@ -532,19 +563,26 @@
            MOVE IJ-DEBIT TO JL-DEBIT.
            MOVE IJ-CREDIT TO JL-CREDIT.
            PERFORM 4400-EFFECT THRU 4400-EXIT.
-           MOVE WS-EFFECT TO JL-AMOUNT.
-           MOVE WS-RUNBAL TO JL-BAL.
+           IF WS-U = 2
+               MOVE WS-EFFECT TO WS-AMT
+               MOVE WS-AMT-USD TO JL-AMOUNT-U
+               MOVE WS-RUNBAL TO WS-AMT
+               MOVE WS-AMT-USD TO JL-BAL-U
+           ELSE
+               MOVE WS-EFFECT TO JL-AMOUNT
+               MOVE WS-RUNBAL TO JL-BAL.
            MOVE JL-LINE TO WS-LINE (WS-I).
            SUBTRACT WS-EFFECT FROM WS-RUNBAL.
        4300-EXIT.
            EXIT.
 
-      *    THE EFFECT OF THE ENTRY ON THE BALANCE OF THE ACCOUNT
+      *    THE EFFECT OF THE ENTRY ON THE BALANCE OF THE ACCOUNT. THE
+      *    USER ACCOUNTS ARE 2100 (RU) AND 2200 (USD, CLASS AGENT).
        4400-EFFECT.
            MOVE ZERO TO WS-EFFECT.
-           IF IJ-CREDIT = '2100'
+           IF IJ-CREDIT = '2100' OR IJ-CREDIT = '2200'
                MOVE IJ-AMOUNT TO WS-EFFECT.
-           IF IJ-DEBIT = '2100'
+           IF IJ-DEBIT = '2100' OR IJ-DEBIT = '2200'
                SUBTRACT IJ-AMOUNT FROM ZERO GIVING WS-EFFECT.
        4400-EXIT.
            EXIT.
@@ -570,6 +608,17 @@
            MOVE WS-YMD-M TO WS-DATE-M.
            MOVE WS-YMD-D TO WS-DATE-D.
        7100-EXIT.
+           EXIT.
+
+      *    THE AMOUNT WS-AMT, EDITED IN THE UNIT WS-U, INTO WS-EDIT.
+      *    (A NUMERIC EDITED ITEM CANNOT BE MOVED TO ANOTHER ONE: THE
+      *    JOURNAL LINE IS EDITED IN 4300-LINE ITSELF)
+       7200-EDIT.
+           IF WS-U = 2
+               MOVE WS-AMT-USD TO WS-EDIT-U
+           ELSE
+               MOVE WS-AMT TO WS-EDIT.
+       7200-EXIT.
            EXIT.
 
        8000-SEND.
