@@ -20,15 +20,20 @@
       * OLDBAL, MASTER AND JOURNAL ARE MATCHED BY ACCOUNT NUMBER. FOR *
       * EVERY ACCOUNT OPENED BY THE END OF THE MONTH:                 *
       *   BROUGHT FORWARD + INCREASE - DECREASE = CARRIED FORWARD     *
-      * AN ENTRY CREDITING 2100 (ALLOCATION) IS AN INCREASE, ONE      *
-      * DEBITING 2100 (USAGE) IS A DECREASE.                          *
+      * AN ENTRY CREDITING THE CONTROL ACCOUNT OF THE UNIT (2100 RU,  *
+      * 2200 USD) IS AN INCREASE (ALLOCATION), ONE DEBITING IT IS A   *
+      * DECREASE (USAGE).                                             *
       *                                                               *
-      * CHECKS:                                                       *
+      * UNITS: THE CLASS CODE (ACCOUNT NO 1-3) GIVES THE UNIT OF AN   *
+      * ACCOUNT. 300 (AGENT) IS USD, KEPT IN CENTS AND PRINTED IN     *
+      * DOLLARS. THE OTHERS ARE RU. TOTALS AND CHECKS ARE BY UNIT.    *
+      *                                                               *
+      * CHECKS, FOR EACH UNIT:                                        *
       *   1. CARRIED FORWARD = THE BALANCE OF THE MASTER LESS THE     *
       *      ENTRIES AFTER THE MONTH (MONTH-END BALANCE FROM THE      *
       *      DAILY SUBSIDIARY LEDGER), FOR EVERY ACCOUNT              *
-      *   2. CONTROL ACCOUNT 2100 OF THE GL LESS THE ENTRIES AFTER    *
-      *      THE MONTH = THE TOTAL CARRIED FORWARD                    *
+      *   2. CONTROL ACCOUNT (2100 / 2200) OF THE GL LESS THE ENTRIES *
+      *      AFTER THE MONTH = THE TOTAL CARRIED FORWARD              *
       *   3. ENTRIES SELECTED BY MONSEL = ENTRIES SAVED (COUNT AND    *
       *      AMOUNT)                                                  *
       * IF A CHECK FAILS, THE RETURN CODE IS 16 AND THE JOB COMMITS   *
@@ -60,13 +65,15 @@
            05  C-TAG               PIC X(3).
            05  FILLER              PIC X.
            05  C-MONTH             PIC X(6).
-           05  FILLER              PIC X.
-           05  C-COUNT             PIC 9(8).
-           05  FILLER              PIC X.
-           05  C-AMOUNT            PIC 9(13).
-           05  FILLER              PIC X.
-           05  C-LATER             PIC 9(8).
-           05  FILLER              PIC X(38).
+      *        CONTROL TOTALS BY UNIT (1 = RU, 2 = USD)
+           05  C-UNIT-TOTALS       OCCURS 2 TIMES.
+               10  FILLER          PIC X.
+               10  C-COUNT         PIC 9(8).
+               10  FILLER          PIC X.
+               10  C-AMOUNT        PIC 9(13).
+               10  FILLER          PIC X.
+               10  C-LATER         PIC 9(8).
+           05  FILLER              PIC X(6).
       *
       * MONTH-END BALANCE RECORD, 80 BYTES
       *
@@ -175,13 +182,13 @@
        77  WS-J-KEY                PIC X(10).
        77  WS-CUR                  PIC X(10).
        77  WS-I                    PIC 9(4)  COMP.
+      *    UNIT OF THE ACCOUNT: 1 = RU, 2 = USD (CENTS), AND ITS
+      *    CONTROL ACCOUNT IN THE GL (2100 / 2200)
+       77  WS-U                    PIC 9(4)  COMP.
+       77  WS-CTL-CODE             PIC X(4).
        77  WS-LINES                PIC 99    VALUE 99.
        77  WS-PAGE                 PIC 9(4)  VALUE ZERO.
        77  WS-ACCT-CNT             PIC 9(6)  VALUE ZERO.
-       77  WS-MISMATCH             PIC 9(6)  VALUE ZERO.
-       77  WS-HIST-CNT             PIC 9(8)  VALUE ZERO.
-       77  WS-HIST-AMT             PIC 9(13) VALUE ZERO.
-       77  WS-LATER-CNT            PIC 9(8)  VALUE ZERO.
        77  WS-EFFECT               PIC S9(11) COMP-3.
        77  WS-RUN                  PIC S9(11) COMP-3.
        77  WS-PRIOR                PIC S9(11) COMP-3.
@@ -190,14 +197,40 @@
        77  WS-CLOSE                PIC S9(11) COMP-3.
        77  WS-AFTER                PIC S9(11) COMP-3.
        77  WS-MEND                 PIC S9(11) COMP-3.
-       77  WS-GL2100               PIC S9(11) COMP-3 VALUE ZERO.
        77  WS-GL-MEND              PIC S9(11) COMP-3.
-       77  TOT-PRIOR               PIC S9(11) COMP-3 VALUE ZERO.
-       77  TOT-INC                 PIC S9(11) COMP-3 VALUE ZERO.
-       77  TOT-DEC                 PIC S9(11) COMP-3 VALUE ZERO.
-       77  TOT-CLOSE               PIC S9(11) COMP-3 VALUE ZERO.
-       77  TOT-MEND                PIC S9(11) COMP-3 VALUE ZERO.
-       77  TOT-AFTER               PIC S9(11) COMP-3 VALUE ZERO.
+      *
+      * TOTALS AND COUNTS BY UNIT (1 = RU, 2 = USD). AMOUNTS OF
+      * DIFFERENT UNITS ARE NEVER ADDED TOGETHER.
+      *
+       01  UNIT-TOTALS.
+           05  UT-ENTRY            OCCURS 2 TIMES.
+      *            CONTROL ACCOUNT OF THE GL (CREDIT BALANCE)
+               10  WS-GL-CTL       PIC S9(11) COMP-3.
+               10  TOT-PRIOR       PIC S9(11) COMP-3.
+               10  TOT-INC         PIC S9(11) COMP-3.
+               10  TOT-DEC         PIC S9(11) COMP-3.
+               10  TOT-CLOSE       PIC S9(11) COMP-3.
+               10  TOT-MEND        PIC S9(11) COMP-3.
+               10  TOT-AFTER       PIC S9(11) COMP-3.
+               10  WS-MISMATCH     PIC 9(6).
+               10  WS-HIST-CNT     PIC 9(8).
+               10  WS-HIST-AMT     PIC 9(13).
+               10  WS-LATER-CNT    PIC 9(8).
+       01  UNIT-INIT.
+           05  FILLER              PIC X(7)  VALUE 'RU 2100'.
+           05  FILLER              PIC X(7)  VALUE 'USD2200'.
+       01  UNIT-TABLE REDEFINES UNIT-INIT.
+           05  UNIT-ENTRY          OCCURS 2 TIMES.
+               10  UNIT-NAME       PIC X(3).
+               10  UNIT-CTL-CODE   PIC X(4).
+      *
+      * AMOUNTS TO PRINT. FOR USD THE SAME BYTES READ WITH TWO
+      * DECIMALS ARE CENTS / 100 (DOLLARS). NO ARITHMETIC.
+      *
+       01  WS-PRT                  PIC S9(11) COMP-3.
+       01  WS-PRT-USD REDEFINES WS-PRT PIC S9(9)V99 COMP-3.
+       01  WS-PRT13                PIC S9(13) COMP-3.
+       01  WS-PRT13-USD REDEFINES WS-PRT13 PIC S9(11)V99 COMP-3.
        01  WS-BIZ.
            05  FILLER              PIC X(18).
            05  WS-BIZ-MONTH        PIC X(6).
@@ -238,6 +271,7 @@
                10  SM-CLOSE        PIC S9(11) COMP-3.
                10  SM-MEND         PIC S9(11) COMP-3.
                10  SM-CHK          PIC X(3).
+               10  SM-UNIT         PIC 9.
       *
       * CURRENT-DATE IS MM/DD/YY
       *
@@ -293,9 +327,11 @@
            05  AH-OPENED-D         PIC X(2).
            05  FILLER              PIC X(11) VALUE '   STATUS: '.
            05  AH-STATUS           PIC X.
-           05  FILLER              PIC X(3)  VALUE SPACES.
+           05  FILLER              PIC X(9)  VALUE '   UNIT: '.
+           05  AH-UNIT             PIC X(3).
+           05  FILLER              PIC X(2)  VALUE SPACES.
            05  AH-CONT             PIC X(11).
-           05  FILLER              PIC X(13) VALUE SPACES.
+           05  FILLER              PIC X(2)  VALUE SPACES.
        01  LH-1.
            05  FILLER              PIC X     VALUE SPACE.
            05  FILLER              PIC X(13) VALUE ' DATE'.
@@ -340,11 +376,15 @@
            05  LD-SLASH            PIC X.
            05  LD-CR               PIC X(4).
            05  FILLER              PIC X(2).
+      *        AMOUNTS: RU AS THEY ARE, USD IN DOLLARS (THE -U FIELDS)
            05  LD-INC              PIC ZZZ,ZZZ,ZZZ,ZZ9.
+           05  LD-INC-U REDEFINES LD-INC PIC ZZZZ,ZZZ,ZZ9.99.
            05  FILLER              PIC X(2).
            05  LD-DEC              PIC ZZZ,ZZZ,ZZZ,ZZ9.
+           05  LD-DEC-U REDEFINES LD-DEC PIC ZZZZ,ZZZ,ZZ9.99.
            05  FILLER              PIC X(2).
            05  LD-BAL              PIC ---,---,---,--9.
+           05  LD-BAL-U REDEFINES LD-BAL PIC ----,---,--9.99.
            05  FILLER              PIC X(29).
        01  SH-1.
            05  FILLER              PIC X     VALUE SPACE.
@@ -386,28 +426,43 @@
            05  FILLER              PIC XX    VALUE SPACES.
            05  S-NAME              PIC X(24).
            05  FILLER              PIC XX    VALUE SPACES.
+      *        AMOUNTS: RU AS THEY ARE, USD IN DOLLARS (THE -U FIELDS)
            05  S-PRIOR             PIC ---,---,---,--9.
+           05  S-PRIOR-U REDEFINES S-PRIOR PIC ----,---,--9.99.
            05  FILLER              PIC X     VALUE SPACE.
            05  S-INC               PIC ---,---,---,--9.
+           05  S-INC-U REDEFINES S-INC PIC ----,---,--9.99.
            05  FILLER              PIC X     VALUE SPACE.
            05  S-DEC               PIC ---,---,---,--9.
+           05  S-DEC-U REDEFINES S-DEC PIC ----,---,--9.99.
            05  FILLER              PIC X     VALUE SPACE.
            05  S-CLOSE             PIC ---,---,---,--9.
+           05  S-CLOSE-U REDEFINES S-CLOSE PIC ----,---,--9.99.
            05  FILLER              PIC X     VALUE SPACE.
            05  S-MEND              PIC ---,---,---,--9.
+           05  S-MEND-U REDEFINES S-MEND PIC ----,---,--9.99.
            05  FILLER              PIC XX    VALUE SPACES.
            05  S-CHK               PIC X(4).
        01  CHECK-LINE.
            05  FILLER              PIC X     VALUE SPACE.
            05  FILLER              PIC X     VALUE SPACE.
+           05  C-UNIT              PIC X(3).
+           05  FILLER              PIC X     VALUE SPACE.
            05  C-TEXT              PIC X(45).
+      *        THE GL ACCOUNT IN 'CONTROL ACCOUNT XXXX ...'
+           05  C-TEXT-R REDEFINES C-TEXT.
+               10  FILLER          PIC X(16).
+               10  C-TEXT-CODE     PIC X(4).
+               10  FILLER          PIC X(25).
       *    13 DIGITS: THE AMOUNT OF THE CONTROL TOTALS IS 9(13)
            05  C-LEFT              PIC --,---,---,---,--9.
+           05  C-LEFT-U REDEFINES C-LEFT PIC ---,---,---,--9.99.
            05  FILLER              PIC X(3)  VALUE ' : '.
            05  C-RIGHT             PIC --,---,---,---,--9.
+           05  C-RIGHT-U REDEFINES C-RIGHT PIC ---,---,---,--9.99.
            05  FILLER              PIC XX    VALUE SPACES.
            05  C-RESULT            PIC X(5).
-           05  FILLER              PIC X(40) VALUE SPACES.
+           05  FILLER              PIC X(36) VALUE SPACES.
        01  MSG-LINE.
            05  FILLER              PIC X     VALUE SPACE.
            05  FILLER              PIC X     VALUE SPACE.
@@ -425,6 +480,8 @@
            OPEN INPUT CTL-FILE OLDBAL-FILE MAST-FILE GL-FILE JRNL-FILE
                       BIZ-FILE
                 OUTPUT HIST-FILE NEWBAL-FILE NEWBIZ-FILE REPORT-FILE.
+           PERFORM INIT-UNIT THRU INIT-UNIT-EXIT
+               VARYING WS-U FROM 1 BY 1 UNTIL WS-U > 2.
            PERFORM LOAD-CTL THRU LOAD-CTL-EXIT.
            PERFORM LOAD-GL THRU LOAD-GL-EXIT.
            PERFORM READ-OB THRU READ-OB-EXIT.
@@ -441,12 +498,22 @@
                  REPORT-FILE.
            DISPLAY 'ACCTLDG MONTH          ' WS-TARGET.
            DISPLAY 'ACCTLDG ACCOUNTS       ' WS-ACCT-CNT.
-           DISPLAY 'ACCTLDG ENTRIES SAVED  ' WS-HIST-CNT.
-           DISPLAY 'ACCTLDG ENTRIES AFTER  ' WS-LATER-CNT.
+           DISPLAY 'ACCTLDG ENTRIES SAVED  ' WS-HIST-CNT (1)
+                   ' RU, ' WS-HIST-CNT (2) ' USD'.
+           DISPLAY 'ACCTLDG ENTRIES AFTER  ' WS-LATER-CNT (1)
+                   ' RU, ' WS-LATER-CNT (2) ' USD'.
            IF WS-ERROR = 'Y'
                DISPLAY 'ACCTLDG: CHECK FAILED, NOTHING IS COMMITTED'
                MOVE 16 TO RETURN-CODE.
            STOP RUN.
+       INIT-UNIT.
+           MOVE ZERO TO WS-GL-CTL (WS-U) TOT-PRIOR (WS-U) TOT-INC (WS-U)
+                        TOT-DEC (WS-U) TOT-CLOSE (WS-U) TOT-MEND (WS-U)
+                        TOT-AFTER (WS-U) WS-MISMATCH (WS-U)
+                        WS-HIST-CNT (WS-U) WS-HIST-AMT (WS-U)
+                        WS-LATER-CNT (WS-U).
+       INIT-UNIT-EXIT.
+           EXIT.
       *
       * CONTROL RECORD FROM MONSEL
       *
@@ -455,7 +522,8 @@
            IF C-TAG NOT = 'MON'
                DISPLAY 'ACCTLDG: NO CONTROL RECORD IN MONCTL'
                MOVE 'Y' TO WS-ERROR
-               MOVE ZERO TO C-COUNT C-AMOUNT C-LATER.
+               MOVE ZERO TO C-COUNT (1) C-AMOUNT (1) C-LATER (1)
+                            C-COUNT (2) C-AMOUNT (2) C-LATER (2).
            MOVE C-MONTH TO WS-TARGET WS-TARGET-SPLIT.
            MOVE WS-TARGET-Y TO H2-Y.
            MOVE WS-TARGET-M TO H2-M.
@@ -466,12 +534,15 @@
        LOAD-CTL-EXIT.
            EXIT.
       *
-      * CONTROL ACCOUNT 2100 OF THE GENERAL LEDGER (CREDIT BALANCE)
+      * CONTROL ACCOUNTS 2100 (RU) AND 2200 (USD) OF THE GENERAL
+      * LEDGER (CREDIT BALANCE). AN ACCOUNT NOT IN THE GL IS ZERO.
       *
        LOAD-GL.
            READ GL-FILE AT END GO TO LOAD-GL-EXIT.
-           IF G-CODE = '2100'
-               COMPUTE WS-GL2100 = G-CREDIT - G-DEBIT.
+           IF G-CODE = UNIT-CTL-CODE (1)
+               COMPUTE WS-GL-CTL (1) = G-CREDIT - G-DEBIT.
+           IF G-CODE = UNIT-CTL-CODE (2)
+               COMPUTE WS-GL-CTL (2) = G-CREDIT - G-DEBIT.
            GO TO LOAD-GL.
        LOAD-GL-EXIT.
            EXIT.
@@ -511,6 +582,13 @@
            MOVE WS-M-KEY TO WS-CUR.
            IF WS-OB-KEY < WS-CUR MOVE WS-OB-KEY TO WS-CUR.
            IF WS-J-KEY < WS-CUR MOVE WS-J-KEY TO WS-CUR.
+      *    THE UNIT OF THE ACCOUNT AND ITS CONTROL ACCOUNT
+           MOVE WS-CUR TO WS-ACCT-SPLIT.
+           IF WS-ACCT-CLS = '300'
+               MOVE 2 TO WS-U
+           ELSE
+               MOVE 1 TO WS-U.
+           MOVE UNIT-CTL-CODE (WS-U) TO WS-CTL-CODE.
            IF WS-M-KEY NOT = WS-CUR
                GO TO PROCESS-NO-MASTER.
            MOVE ZERO TO WS-PRIOR WS-INC WS-DEC WS-AFTER.
@@ -533,7 +611,7 @@
                UNTIL WS-J-KEY NOT = WS-CUR.
            COMPUTE WS-CLOSE = WS-PRIOR + WS-INC - WS-DEC.
            COMPUTE WS-MEND = M-BAL - WS-AFTER.
-           ADD WS-AFTER TO TOT-AFTER.
+           ADD WS-AFTER TO TOT-AFTER (WS-U).
            IF WS-SHOW = 'Y'
                PERFORM LEDGER-END THRU LEDGER-END-EXIT
            ELSE
@@ -557,19 +635,21 @@
            EXIT.
       *
       * ONE ENTRY: AN ENTRY OF THE MONTH GOES TO THE LEDGER AND IS
-      * SAVED, A LATER ONE ONLY COUNTS FOR THE MONTH-END BALANCE
+      * SAVED, A LATER ONE ONLY COUNTS FOR THE MONTH-END BALANCE.
+      * THE EFFECT ON THE BALANCE COMES FROM THE CONTROL ACCOUNT OF
+      * THE UNIT OF THE ACCOUNT.
       *
        APPLY-J.
            MOVE ZERO TO WS-EFFECT.
-           IF J-CREDIT = '2100'
+           IF J-CREDIT = WS-CTL-CODE
                MOVE J-AMOUNT TO WS-EFFECT.
-           IF J-DEBIT = '2100'
+           IF J-DEBIT = WS-CTL-CODE
                SUBTRACT J-AMOUNT FROM ZERO GIVING WS-EFFECT.
            IF J-YM = WS-TARGET
                PERFORM MONTH-ENTRY THRU MONTH-ENTRY-EXIT
            ELSE
                ADD WS-EFFECT TO WS-AFTER
-               ADD 1 TO WS-LATER-CNT.
+               ADD 1 TO WS-LATER-CNT (WS-U).
            PERFORM READ-J THRU READ-J-EXIT.
        APPLY-J-EXIT.
            EXIT.
@@ -580,8 +660,8 @@
            ELSE
                ADD WS-EFFECT TO WS-INC.
            WRITE HIST-OUT FROM J-ALL.
-           ADD 1 TO WS-HIST-CNT.
-           ADD J-AMOUNT TO WS-HIST-AMT.
+           ADD 1 TO WS-HIST-CNT (WS-U).
+           ADD J-AMOUNT TO WS-HIST-AMT (WS-U).
            MOVE SPACES TO LD-LINE.
            MOVE J-Y TO LD-Y.
            MOVE J-M TO LD-M.
@@ -601,11 +681,13 @@
            MOVE J-DEBIT TO LD-DR.
            MOVE '/' TO LD-SLASH.
            MOVE J-CREDIT TO LD-CR.
+           MOVE J-AMOUNT TO WS-PRT.
            IF WS-EFFECT < ZERO
-               MOVE J-AMOUNT TO LD-DEC
+               PERFORM PUT-LD-DEC THRU PUT-LD-DEC-EXIT
            ELSE
-               MOVE J-AMOUNT TO LD-INC.
-           MOVE WS-RUN TO LD-BAL.
+               PERFORM PUT-LD-INC THRU PUT-LD-INC-EXIT.
+           MOVE WS-RUN TO WS-PRT.
+           PERFORM PUT-LD-BAL THRU PUT-LD-BAL-EXIT.
            PERFORM LEDGER-LINE-OUT THRU LEDGER-LINE-OUT-EXIT.
        MONTH-ENTRY-EXIT.
            EXIT.
@@ -631,6 +713,7 @@
            MOVE WS-OPENED-M TO AH-OPENED-M.
            MOVE WS-OPENED-D TO AH-OPENED-D.
            MOVE M-STATUS TO AH-STATUS.
+           MOVE UNIT-NAME (WS-U) TO AH-UNIT.
            WRITE REPORT-REC FROM HDR-1 AFTER ADVANCING TOP-OF-PAGE.
            WRITE REPORT-REC FROM HDR-2 AFTER ADVANCING 1 LINES.
            WRITE REPORT-REC FROM AH-LINE AFTER ADVANCING 2 LINES.
@@ -650,7 +733,8 @@
        LEDGER-BF.
            MOVE SPACES TO LD-LINE.
            MOVE 'BROUGHT FORWARD' TO LD-DESC.
-           MOVE WS-PRIOR TO LD-BAL.
+           MOVE WS-PRIOR TO WS-PRT.
+           PERFORM PUT-LD-BAL THRU PUT-LD-BAL-EXIT.
            PERFORM LEDGER-LINE-OUT THRU LEDGER-LINE-OUT-EXIT.
        LEDGER-BF-EXIT.
            EXIT.
@@ -658,12 +742,15 @@
            MOVE SPACES TO LD-LINE.
            PERFORM LEDGER-LINE-OUT THRU LEDGER-LINE-OUT-EXIT.
            MOVE 'MONTH TOTAL' TO LD-DESC.
-           MOVE WS-INC TO LD-INC.
-           MOVE WS-DEC TO LD-DEC.
+           MOVE WS-INC TO WS-PRT.
+           PERFORM PUT-LD-INC THRU PUT-LD-INC-EXIT.
+           MOVE WS-DEC TO WS-PRT.
+           PERFORM PUT-LD-DEC THRU PUT-LD-DEC-EXIT.
            PERFORM LEDGER-LINE-OUT THRU LEDGER-LINE-OUT-EXIT.
            MOVE SPACES TO LD-LINE.
            MOVE 'CARRIED FORWARD' TO LD-DESC.
-           MOVE WS-CLOSE TO LD-BAL.
+           MOVE WS-CLOSE TO WS-PRT.
+           PERFORM PUT-LD-BAL THRU PUT-LD-BAL-EXIT.
            PERFORM LEDGER-LINE-OUT THRU LEDGER-LINE-OUT-EXIT.
       *    MONTH-END BALANCE FOR THE NEXT MONTH
            MOVE WS-CUR TO NB-ACCT.
@@ -674,11 +761,11 @@
            MOVE WS-CLOSE TO NB-CLOSE.
            WRITE NB-OUT FROM NB-REC.
            ADD 1 TO WS-ACCT-CNT.
-           ADD WS-PRIOR TO TOT-PRIOR.
-           ADD WS-INC TO TOT-INC.
-           ADD WS-DEC TO TOT-DEC.
-           ADD WS-CLOSE TO TOT-CLOSE.
-           ADD WS-MEND TO TOT-MEND.
+           ADD WS-PRIOR TO TOT-PRIOR (WS-U).
+           ADD WS-INC TO TOT-INC (WS-U).
+           ADD WS-DEC TO TOT-DEC (WS-U).
+           ADD WS-CLOSE TO TOT-CLOSE (WS-U).
+           ADD WS-MEND TO TOT-MEND (WS-U).
       *    CHECK 1 FOR THE ACCOUNT, KEPT FOR THE SUMMARY
            IF SM-COUNT NOT < 500
                DISPLAY 'ACCTLDG: MORE THAN 500 ACCOUNTS'
@@ -694,11 +781,12 @@
            MOVE WS-DEC TO SM-DEC (WS-I).
            MOVE WS-CLOSE TO SM-CLOSE (WS-I).
            MOVE WS-MEND TO SM-MEND (WS-I).
+           MOVE WS-U TO SM-UNIT (WS-I).
            IF WS-CLOSE = WS-MEND
                MOVE 'OK' TO SM-CHK (WS-I)
            ELSE
                MOVE 'ERR' TO SM-CHK (WS-I)
-               ADD 1 TO WS-MISMATCH
+               ADD 1 TO WS-MISMATCH (WS-U)
                MOVE 'Y' TO WS-ERROR
                DISPLAY 'ACCTLDG: CARRIED FORWARD IS NOT THE MASTER '
                        WS-CUR.
@@ -710,69 +798,29 @@
            IF WS-MEND NOT = ZERO
                DISPLAY 'ACCTLDG: OPENED AFTER THE MONTH BUT HAS A '
                        'MONTH-END BALANCE ' WS-CUR
-               ADD 1 TO WS-MISMATCH
+               ADD 1 TO WS-MISMATCH (WS-U)
                MOVE 'Y' TO WS-ERROR.
        CHECK-NOT-OPEN-EXIT.
            EXIT.
       *
-      * REPORT: MONTHLY BALANCES AND THE CHECKS
+      * REPORT: MONTHLY BALANCES AND THE CHECKS, BY UNIT
       *
        PRINT-SUMMARY.
            PERFORM SUMMARY-HEAD THRU SUMMARY-HEAD-EXIT.
            PERFORM SUMMARY-LINE THRU SUMMARY-LINE-EXIT
                VARYING WS-I FROM 1 BY 1 UNTIL WS-I > SM-COUNT.
-           MOVE SPACES TO S-ACCT S-CLASS S-CHK.
-           MOVE 'TOTAL' TO S-NAME.
-           MOVE TOT-PRIOR TO S-PRIOR.
-           MOVE TOT-INC TO S-INC.
-           MOVE TOT-DEC TO S-DEC.
-           MOVE TOT-CLOSE TO S-CLOSE.
-           MOVE TOT-MEND TO S-MEND.
            WRITE REPORT-REC FROM BLANK-LINE AFTER ADVANCING 1 LINES.
-           WRITE REPORT-REC FROM SM-LINE AFTER ADVANCING 1 LINES.
+           PERFORM SUMMARY-TOTAL THRU SUMMARY-TOTAL-EXIT
+               VARYING WS-U FROM 1 BY 1 UNTIL WS-U > 2.
            MOVE 'M-END = BALANCE OF THE MASTER LESS THE LATER ENTRIES'
                TO M-TEXT.
            WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 2 LINES.
-      *    CHECK 1: CARRIED FORWARD = MASTER AT THE MONTH END
-           MOVE 'CARRIED FORWARD : MASTER AT MONTH END' TO C-TEXT.
-           MOVE TOT-CLOSE TO C-LEFT.
-           MOVE TOT-MEND TO C-RIGHT.
-           IF WS-MISMATCH = ZERO AND TOT-CLOSE = TOT-MEND
-               MOVE 'OK' TO C-RESULT
-           ELSE
-               MOVE 'ERROR' TO C-RESULT
-               MOVE 'Y' TO WS-ERROR.
-           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 3 LINES.
-      *    CHECK 2: CONTROL ACCOUNT 2100 AT THE MONTH END
-           COMPUTE WS-GL-MEND = WS-GL2100 - TOT-AFTER.
-           MOVE 'CONTROL ACCOUNT 2100 AT MONTH END : CARRIED' TO C-TEXT.
-           MOVE WS-GL-MEND TO C-LEFT.
-           MOVE TOT-CLOSE TO C-RIGHT.
-           IF WS-GL-MEND = TOT-CLOSE
-               MOVE 'OK' TO C-RESULT
-           ELSE
-               MOVE 'ERROR' TO C-RESULT
-               MOVE 'Y' TO WS-ERROR.
-           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 1 LINES.
-      *    CHECK 3: ENTRIES SELECTED = ENTRIES SAVED
-           MOVE 'ENTRIES SELECTED : SAVED (COUNT)' TO C-TEXT.
-           MOVE C-COUNT TO C-LEFT.
-           MOVE WS-HIST-CNT TO C-RIGHT.
-           IF C-COUNT = WS-HIST-CNT AND C-LATER = WS-LATER-CNT
-               MOVE 'OK' TO C-RESULT
-           ELSE
-               MOVE 'ERROR' TO C-RESULT
-               MOVE 'Y' TO WS-ERROR.
-           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 1 LINES.
-           MOVE 'ENTRIES SELECTED : SAVED (AMOUNT)' TO C-TEXT.
-           MOVE C-AMOUNT TO C-LEFT.
-           MOVE WS-HIST-AMT TO C-RIGHT.
-           IF C-AMOUNT = WS-HIST-AMT
-               MOVE 'OK' TO C-RESULT
-           ELSE
-               MOVE 'ERROR' TO C-RESULT
-               MOVE 'Y' TO WS-ERROR.
-           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 1 LINES.
+           MOVE 'UNIT: USD (DOLLARS AND CENTS) FOR CLASS AGENT, ELSE RU'
+               TO M-TEXT.
+           WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 1 LINES.
+           WRITE REPORT-REC FROM BLANK-LINE AFTER ADVANCING 1 LINES.
+           PERFORM SUMMARY-CHECK THRU SUMMARY-CHECK-EXIT
+               VARYING WS-U FROM 1 BY 1 UNTIL WS-U > 2.
            IF WS-ERROR = 'Y'
                MOVE '*** CHECK FAILED. THE MONTH IS NOT CLOSED ***'
                    TO M-TEXT
@@ -781,6 +829,76 @@
            WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 2 LINES.
            WRITE REPORT-REC FROM END-LINE AFTER ADVANCING 3 LINES.
        PRINT-SUMMARY-EXIT.
+           EXIT.
+       SUMMARY-TOTAL.
+           MOVE SPACES TO S-ACCT S-CLASS S-CHK.
+           IF WS-U = 1
+               MOVE 'TOTAL (RU)' TO S-NAME
+           ELSE
+               MOVE 'TOTAL (USD)' TO S-NAME.
+           MOVE TOT-PRIOR (WS-U) TO WS-PRIOR.
+           MOVE TOT-INC (WS-U) TO WS-INC.
+           MOVE TOT-DEC (WS-U) TO WS-DEC.
+           MOVE TOT-CLOSE (WS-U) TO WS-CLOSE.
+           MOVE TOT-MEND (WS-U) TO WS-MEND.
+           PERFORM SUMMARY-AMOUNTS THRU SUMMARY-AMOUNTS-EXIT.
+           WRITE REPORT-REC FROM SM-LINE AFTER ADVANCING 1 LINES.
+       SUMMARY-TOTAL-EXIT.
+           EXIT.
+      *    THE CHECKS OF ONE UNIT
+       SUMMARY-CHECK.
+           MOVE UNIT-NAME (WS-U) TO C-UNIT.
+      *    CHECK 1: CARRIED FORWARD = MASTER AT THE MONTH END
+           MOVE 'CARRIED FORWARD : MASTER AT MONTH END' TO C-TEXT.
+           MOVE TOT-CLOSE (WS-U) TO WS-PRT13.
+           PERFORM PUT-C-LEFT THRU PUT-C-LEFT-EXIT.
+           MOVE TOT-MEND (WS-U) TO WS-PRT13.
+           PERFORM PUT-C-RIGHT THRU PUT-C-RIGHT-EXIT.
+           IF WS-MISMATCH (WS-U) = ZERO AND
+              TOT-CLOSE (WS-U) = TOT-MEND (WS-U)
+               MOVE 'OK' TO C-RESULT
+           ELSE
+               MOVE 'ERROR' TO C-RESULT
+               MOVE 'Y' TO WS-ERROR.
+           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 1 LINES.
+      *    CHECK 2: CONTROL ACCOUNT (2100 / 2200) AT THE MONTH END
+           COMPUTE WS-GL-MEND = WS-GL-CTL (WS-U) - TOT-AFTER (WS-U).
+           MOVE 'CONTROL ACCOUNT XXXX AT MONTH END : CARRIED' TO C-TEXT.
+           MOVE UNIT-CTL-CODE (WS-U) TO C-TEXT-CODE.
+           MOVE WS-GL-MEND TO WS-PRT13.
+           PERFORM PUT-C-LEFT THRU PUT-C-LEFT-EXIT.
+           MOVE TOT-CLOSE (WS-U) TO WS-PRT13.
+           PERFORM PUT-C-RIGHT THRU PUT-C-RIGHT-EXIT.
+           IF WS-GL-MEND = TOT-CLOSE (WS-U)
+               MOVE 'OK' TO C-RESULT
+           ELSE
+               MOVE 'ERROR' TO C-RESULT
+               MOVE 'Y' TO WS-ERROR.
+           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 1 LINES.
+      *    CHECK 3: ENTRIES SELECTED = ENTRIES SAVED (COUNTS ARE NOT
+      *    AMOUNTS: ALWAYS PRINTED AS THEY ARE)
+           MOVE 'ENTRIES SELECTED : SAVED (COUNT)' TO C-TEXT.
+           MOVE C-COUNT (WS-U) TO C-LEFT.
+           MOVE WS-HIST-CNT (WS-U) TO C-RIGHT.
+           IF C-COUNT (WS-U) = WS-HIST-CNT (WS-U) AND
+              C-LATER (WS-U) = WS-LATER-CNT (WS-U)
+               MOVE 'OK' TO C-RESULT
+           ELSE
+               MOVE 'ERROR' TO C-RESULT
+               MOVE 'Y' TO WS-ERROR.
+           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 1 LINES.
+           MOVE 'ENTRIES SELECTED : SAVED (AMOUNT)' TO C-TEXT.
+           MOVE C-AMOUNT (WS-U) TO WS-PRT13.
+           PERFORM PUT-C-LEFT THRU PUT-C-LEFT-EXIT.
+           MOVE WS-HIST-AMT (WS-U) TO WS-PRT13.
+           PERFORM PUT-C-RIGHT THRU PUT-C-RIGHT-EXIT.
+           IF C-AMOUNT (WS-U) = WS-HIST-AMT (WS-U)
+               MOVE 'OK' TO C-RESULT
+           ELSE
+               MOVE 'ERROR' TO C-RESULT
+               MOVE 'Y' TO WS-ERROR.
+           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 1 LINES.
+       SUMMARY-CHECK-EXIT.
            EXIT.
        SUMMARY-HEAD.
            MOVE 'MONTHLY BALANCES' TO H1-TITLE.
@@ -801,15 +919,77 @@
            MOVE WS-ACCT-SER TO S-ACCT-SER.
            MOVE SM-CLASS (WS-I) TO S-CLASS.
            MOVE SM-NAME (WS-I) TO S-NAME.
-           MOVE SM-PRIOR (WS-I) TO S-PRIOR.
-           MOVE SM-INC (WS-I) TO S-INC.
-           MOVE SM-DEC (WS-I) TO S-DEC.
-           MOVE SM-CLOSE (WS-I) TO S-CLOSE.
-           MOVE SM-MEND (WS-I) TO S-MEND.
+           MOVE SM-UNIT (WS-I) TO WS-U.
+           MOVE SM-PRIOR (WS-I) TO WS-PRIOR.
+           MOVE SM-INC (WS-I) TO WS-INC.
+           MOVE SM-DEC (WS-I) TO WS-DEC.
+           MOVE SM-CLOSE (WS-I) TO WS-CLOSE.
+           MOVE SM-MEND (WS-I) TO WS-MEND.
+           PERFORM SUMMARY-AMOUNTS THRU SUMMARY-AMOUNTS-EXIT.
            MOVE SM-CHK (WS-I) TO S-CHK.
            WRITE REPORT-REC FROM SM-LINE AFTER ADVANCING 1 LINES.
            ADD 1 TO WS-LINES.
        SUMMARY-LINE-EXIT.
+           EXIT.
+      *    THE AMOUNTS OF A MONTHLY BALANCE LINE IN THE UNIT WS-U
+       SUMMARY-AMOUNTS.
+           IF WS-U = 1
+               MOVE WS-PRIOR TO S-PRIOR
+               MOVE WS-INC TO S-INC
+               MOVE WS-DEC TO S-DEC
+               MOVE WS-CLOSE TO S-CLOSE
+               MOVE WS-MEND TO S-MEND
+               GO TO SUMMARY-AMOUNTS-EXIT.
+           MOVE WS-PRIOR TO WS-PRT.
+           MOVE WS-PRT-USD TO S-PRIOR-U.
+           MOVE WS-INC TO WS-PRT.
+           MOVE WS-PRT-USD TO S-INC-U.
+           MOVE WS-DEC TO WS-PRT.
+           MOVE WS-PRT-USD TO S-DEC-U.
+           MOVE WS-CLOSE TO WS-PRT.
+           MOVE WS-PRT-USD TO S-CLOSE-U.
+           MOVE WS-MEND TO WS-PRT.
+           MOVE WS-PRT-USD TO S-MEND-U.
+       SUMMARY-AMOUNTS-EXIT.
+           EXIT.
+      *
+      * AN AMOUNT (WS-PRT / WS-PRT13) INTO A FIELD OF THE REPORT, IN
+      * THE UNIT WS-U
+      *
+       PUT-LD-INC.
+           IF WS-U = 1
+               MOVE WS-PRT TO LD-INC
+           ELSE
+               MOVE WS-PRT-USD TO LD-INC-U.
+       PUT-LD-INC-EXIT.
+           EXIT.
+       PUT-LD-DEC.
+           IF WS-U = 1
+               MOVE WS-PRT TO LD-DEC
+           ELSE
+               MOVE WS-PRT-USD TO LD-DEC-U.
+       PUT-LD-DEC-EXIT.
+           EXIT.
+       PUT-LD-BAL.
+           IF WS-U = 1
+               MOVE WS-PRT TO LD-BAL
+           ELSE
+               MOVE WS-PRT-USD TO LD-BAL-U.
+       PUT-LD-BAL-EXIT.
+           EXIT.
+       PUT-C-LEFT.
+           IF WS-U = 1
+               MOVE WS-PRT13 TO C-LEFT
+           ELSE
+               MOVE WS-PRT13-USD TO C-LEFT-U.
+       PUT-C-LEFT-EXIT.
+           EXIT.
+       PUT-C-RIGHT.
+           IF WS-U = 1
+               MOVE WS-PRT13 TO C-RIGHT
+           ELSE
+               MOVE WS-PRT13-USD TO C-RIGHT-U.
+       PUT-C-RIGHT-EXIT.
            EXIT.
       *
       * BUSINESS DATES: ONLY THE LAST CLOSED MONTH (19-24) CHANGES

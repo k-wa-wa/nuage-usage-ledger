@@ -1,6 +1,6 @@
 /* REXX *************************************************************/
-/* USAGEGET - FETCH THE CLUSTER USAGE FROM VICTORIAMETRICS           */
-/*            (PROMQL OVER HTTP)                                    */
+/* USAGEGET - FETCH THE CLUSTER USAGE AND THE AI AGENT COST FROM    */
+/*            VICTORIAMETRICS (PROMQL OVER HTTP)                    */
 /*                                                                  */
 /* ARG : MODE=REPORT    ONE DAY: DATE= OR YESTERDAY (DEFAULT)       */
 /*       MODE=LEDGER    FROM THE NEXT BUSINESS DATE IN DD BIZDATE   */
@@ -12,9 +12,14 @@
 /*                                                                  */
 /* DD USAGE  : 80-BYTE USAGE RECORDS, ONE PER DATE, CLASS AND NAME  */
 /*             COLS  1-8  DATE YYYYMMDD                             */
-/*             COLS  9-13 CLASS (K8S / HOST)                        */
-/*             COLS 14-37 NAME                                      */
-/*             COLS 38-73 CPU-H, MEM-GBH, NET-GB, STOR-GB 9(7)V99   */
+/*             COLS  9-13 CLASS (K8S / HOST / AGENT)                */
+/*             COLS 14-37 NAME (AGENT: THE REPOSITORY)              */
+/*             COLS 38-73 FOUR QUANTITIES 9(7)V99. THEIR MEANING    */
+/*                        DEPENDS ON THE CLASS:                     */
+/*                        K8S, HOST: CPU-H, MEM-GBH, NET-GB, STOR-GB*/
+/*                        AGENT    : COST-USD, 0, 0, 0              */
+/*             QUANTITIES ARE ROUNDED HALF UP TO 2 DECIMALS (CENTS) */
+/*             ON THE DECIMAL STRING RETURNED (SEE CENTS)           */
 /* DD CTLCARD: RUN RECORD, THEN ONE DAY RECORD PER DATE             */
 /*             RUN YYYY-MM-DD(RUN) YYYY-MM-DD(FROM) YYYY-MM-DD(TO)  */
 /*                 YYYYMMDD(NEXT BUSINESS DATE)                     */
@@ -86,7 +91,9 @@ END
 SAY MODE 'FROM' CIVIL(FIRSTDAY) 'TO' CIVIL(LASTDAY)
 
 /* ----------------------------------------------------------------- */
-/* QUERIES: 1 CPU-H, 2 MEM-GBH, 3 NET-GB, 4 STOR-GB                  */
+/* QUERIES: CLASS C HAS NQ.C QUERIES, ONE PER QUANTITY FIELD        */
+/*   K8S, HOST: 1 CPU-H, 2 MEM-GBH, 3 NET-GB, 4 STOR-GB              */
+/*   AGENT    : 1 COST-USD (ESTIMATED BY THE COLLECTOR OF ATELIER)   */
 /* NOTE: A STRING DIRECTLY FOLLOWED BY X OR B IS A HEX/BINARY       */
 /*       LITERAL IN REXX ('{'X), SO THE SELECTOR IS NAMED SEL.      */
 /* ----------------------------------------------------------------- */
@@ -123,8 +130,17 @@ Q.2.4 = 'sum by (nodename) ((',
      || 'node_filesystem_size_bytes{'SEL',mountpoint="/"} - ',
      || 'node_filesystem_avail_bytes{'SEL',mountpoint="/"})',
      || J ') /' GIB
+
+LBL.3 = 'repo'
+Q.3.1 = 'sum by (repo) (increase(',
+     || 'nuage_ai_agent_cost_usd_total[1d]))'
 CLASS.1 = 'K8S'
 CLASS.2 = 'HOST'
+CLASS.3 = 'AGENT'
+NQ.1 = 4
+NQ.2 = 4
+NQ.3 = 1
+NCLASS = 3
 
 /* ----------------------------------------------------------------- */
 /* FETCH: ONE SET OF QUERIES PER DAY, EVALUATED AT 00:00 JST OF THE  */
@@ -144,8 +160,8 @@ SEEN. = 0                              /* KEYS ALREADY COLLECTED   */
 VAL. = 0                               /* VALUES DEFAULT TO ZERO   */
 DO DAY = FIRSTDAY TO LASTDAY
   EVALTS = (DAY + 1) * 86400 - 9 * 3600
-  DO C = 1 TO 2
-    DO I = 1 TO 4
+  DO C = 1 TO NCLASS
+    DO I = 1 TO NQ.C
       BODY = QUERY(Q.C.I)
       IF BODY = '' THEN DO
         CALL TCPCLOSE SOCK
@@ -172,7 +188,7 @@ DO K = 1 TO NKEYS
   PARSE VAR KEY D '/' CL '/' NAME
   NUMS = ''
   DO I = 1 TO 4
-    V = FORMAT(MAX(VAL.KEY.I, 0) * 100, , 0)
+    V = CENTS(VAL.KEY.I)
     NUMS = NUMS || RIGHT(MIN(V, 999999999), 9, '0')
   END
   OUT.K = LEFT(YMD(CIVIL(D)) || LEFT(CL, 5) ||,
@@ -319,6 +335,26 @@ COLLECT:
     VAL.KEY.I = NUM
   END
   RETURN
+
+/* ----------------------------------------------------------------- */
+/* CENTS: A DECIMAL STRING -> HUNDREDTHS (CENTS), ROUNDED HALF UP AT */
+/* THE THIRD DECIMAL OF THE STRING. NEGATIVE OR NOT A NUMBER -> 0.   */
+/* THE ROUNDING IS DONE ON THE DIGITS, NOT BY ARITHMETIC: BREXX      */
+/* NUMBERS ARE BINARY FLOATING POINT, AND 13.775 * 100 MAY COME OUT  */
+/* AS 1377.4999...                                                   */
+/* ----------------------------------------------------------------- */
+CENTS: PROCEDURE
+  N = STRIP(ARG(1))
+  IF DATATYPE(N, 'N') = 0 THEN RETURN 0
+  IF N <= 0 THEN RETURN 0
+  /* EXPONENT FORM (1.5E-05): WRITE IT OUT WITH 6 DECIMALS FIRST     */
+  IF VERIFY(N, '0123456789.') > 0 THEN N = FORMAT(N, , 6)
+  PARSE VAR N WHOLE '.' FRAC
+  IF WHOLE = '' THEN WHOLE = 0
+  FRAC = LEFT(FRAC, 3, '0')
+  C = WHOLE * 100 + LEFT(FRAC, 2)
+  IF SUBSTR(FRAC, 3, 1) >= 5 THEN C = C + 1
+  RETURN C
 
 /* ----------------------------------------------------------------- */
 /* URLENC: PERCENT-ENCODE A QUERY STRING                             */

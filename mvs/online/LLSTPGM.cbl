@@ -5,6 +5,9 @@
       *                                                               *
       * LISTS THE ACCOUNTS OF THE INQUIRY MASTER IN ACCOUNT ORDER,    *
       * 15 A PAGE, WITH THE BALANCE. OVERDRAWN ACCOUNTS ARE BRIGHT.   *
+      * AN ACCOUNT NEVER ALLOCATED (ALLOCATED TOTAL ZERO) IS NOT      *
+      * OVERDRAWN. THE BALANCE IS IN THE UNIT OF THE ACCOUNT: RU, OR  *
+      * USD IN DOLLARS AND CENTS FOR CLASS CODE 300 (AGENT).          *
       * S BEFORE AN ACCOUNT SHOWS IT IN THE ACCOUNT INQUIRY (LBAL).   *
       * READ ONLY.                                                    *
       *                                                               *
@@ -102,12 +105,21 @@
            05  LN-CLASS            PIC X(5).
            05  FILLER              PIC X(2)  VALUE SPACES.
            05  LN-NAME             PIC X(24).
-           05  FILLER              PIC X(2)  VALUE SPACES.
+           05  FILLER              PIC X     VALUE SPACE.
+      *        RU AS IT IS, USD IN DOLLARS (LN-BAL-U)
            05  LN-BAL              PIC ---,---,---,--9.
-           05  FILLER              PIC X(2)  VALUE SPACES.
+           05  LN-BAL-U REDEFINES LN-BAL PIC ----,---,--9.99.
+           05  FILLER              PIC X     VALUE SPACE.
+           05  LN-UNIT             PIC X(3).
+           05  FILLER              PIC X     VALUE SPACE.
            05  LN-ST               PIC X.
-           05  FILLER              PIC X(2)  VALUE SPACES.
-           05  LN-NOTE             PIC X(10).
+           05  FILLER              PIC X     VALUE SPACE.
+           05  LN-NOTE             PIC X(9).
+      *
+      * CENTS TO DOLLARS: THE SAME 6 BYTES READ WITH TWO DECIMALS
+      *
+       01  WS-CENTS                PIC S9(11) COMP-3.
+       01  WS-DOLLARS REDEFINES WS-CENTS PIC S9(9)V99 COMP-3.
        01  WS-ROWS.
            05  WS-ROW              OCCURS 15 TIMES.
                10  WS-ROW-LINE     PIC X(76).
@@ -323,10 +335,17 @@
            MOVE IM-ACCT-SER TO LN-ACCT-SER.
            MOVE IM-CLASS TO LN-CLASS.
            MOVE IM-NAME TO LN-NAME.
-           MOVE IM-BAL TO LN-BAL.
+           IF IM-ACCT-CLS = '300'
+               MOVE IM-BAL TO WS-CENTS
+               MOVE WS-DOLLARS TO LN-BAL-U
+               MOVE 'USD' TO LN-UNIT
+           ELSE
+               MOVE IM-BAL TO LN-BAL
+               MOVE 'RU' TO LN-UNIT.
            MOVE IM-STATUS TO LN-ST.
            MOVE SPACES TO LN-NOTE.
-           IF IM-BAL < ZERO
+      *    AN ACCOUNT NEVER ALLOCATED IS NOT OVERDRAWN
+           IF IM-BAL < ZERO AND IM-ALLOC NOT = ZERO
                MOVE 'OVERDRAWN' TO LN-NOTE
                MOVE 'Y' TO WS-ROW-OVER (WS-I).
            MOVE LN-LINE TO WS-ROW-LINE (WS-I).

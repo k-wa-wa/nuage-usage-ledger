@@ -23,14 +23,28 @@
       * WITHOUT A MASTER RECORD IS OPENED, AND ITS WEEKLY ALLOCATION  *
       * IS POSTED ONCE AS THE OPENING ALLOCATION.                     *
       *                                                               *
-      * JOURNAL ENTRIES (DEBIT / CREDIT):                             *
-      *   ALLOCATION (O, A) : 1100 ALLOCATION SOURCE / 2100 ACCOUNTS  *
-      *   USAGE      (U)    : 2100 ACCOUNTS / 4100 USAGE              *
+      * A DEFINED ACCOUNT WITH A WEEKLY ALLOCATION OF ZERO GETS NO    *
+      * OPENING ALLOCATION.                                           *
       *                                                               *
-      * CHECKS: DEBIT TOTAL = CREDIT TOTAL, AND THE CONTROL ACCOUNT   *
-      * 2100 = THE TOTAL OF THE SUBSIDIARY LEDGER. IF A CHECK FAILS,  *
-      * THE RETURN CODE IS 16 AND THE JOB DOES NOT COMMIT THE NEW     *
-      * GENERATIONS NOR THE NEXT BUSINESS DATE.                       *
+      * UNITS: THE CLASS CODE (ACCOUNT NO 1-3) GIVES THE UNIT OF AN   *
+      * ACCOUNT. 300 (AGENT) IS USD, KEPT IN CENTS. THE OTHERS ARE    *
+      * RU. EVERY UNIT HAS ITS OWN GL ACCOUNTS, AND AMOUNTS OF        *
+      * DIFFERENT UNITS ARE NEVER ADDED TOGETHER.                     *
+      *                                                               *
+      * JOURNAL ENTRIES (DEBIT / CREDIT):                    RU   USD *
+      *   ALLOCATION (O, A) : ALLOCATION SOURCE / ACCOUNTS 1100 1200  *
+      *                                                    2100 2200  *
+      *   USAGE      (U)    : ACCOUNTS / USAGE             2100 2200  *
+      *                                                    4100 4200  *
+      *                                                               *
+      * CHECKS, FOR EACH UNIT: DEBIT TOTAL = CREDIT TOTAL, AND THE    *
+      * CONTROL ACCOUNT (2100 / 2200) = THE TOTAL OF THE SUBSIDIARY   *
+      * LEDGER OF THE UNIT. IF A CHECK FAILS, THE RETURN CODE IS 16   *
+      * AND THE JOB DOES NOT COMMIT THE NEW GENERATIONS NOR THE NEXT  *
+      * BUSINESS DATE.                                                *
+      *                                                               *
+      * AN ACCOUNT IS OVERDRAWN IF ITS BALANCE IS NEGATIVE AND IT HAS *
+      * EVER BEEN ALLOCATED (ALLOCATED TOTAL NOT ZERO).               *
       *****************************************************************
        ENVIRONMENT DIVISION.
        CONFIGURATION SECTION.
@@ -203,6 +217,12 @@
        77  WS-JCR                  PIC X(4).
        77  WS-SEQ                  PIC 9(6)  VALUE ZERO.
        77  WS-I                    PIC 9(4)  COMP.
+      *    UNIT OF THE ACCOUNT: 1 = RU, 2 = USD (CENTS), AND ITS GL
+      *    ACCOUNTS (ALLOCATION SOURCE, CONTROL ACCOUNT, USAGE)
+       77  WS-U                    PIC 9(4)  COMP.
+       77  WS-GSRC                 PIC 9(4)  COMP.
+       77  WS-GCTL                 PIC 9(4)  COMP.
+       77  WS-GUSE                 PIC 9(4)  COMP.
        77  WS-LINES                PIC 99    VALUE 99.
        77  WS-PAGE                 PIC 9(4)  VALUE ZERO.
        77  WS-ACCT-CNT             PIC 9(6)  VALUE ZERO.
@@ -210,16 +230,41 @@
        77  WS-PRIOR                PIC S9(11) COMP-3.
        77  WS-PALLOC               PIC S9(11) COMP-3.
        77  WS-PUSED                PIC S9(11) COMP-3.
-       77  TOT-PRIOR               PIC S9(11) COMP-3 VALUE ZERO.
-       77  TOT-ALLOC               PIC S9(11) COMP-3 VALUE ZERO.
-       77  TOT-USED                PIC S9(11) COMP-3 VALUE ZERO.
-       77  SUB-TOTAL               PIC S9(11) COMP-3 VALUE ZERO.
        77  TOT-DEBIT               PIC S9(11) COMP-3 VALUE ZERO.
        77  TOT-CREDIT              PIC S9(11) COMP-3 VALUE ZERO.
        77  TOT-DR-BAL              PIC S9(11) COMP-3 VALUE ZERO.
        77  TOT-CR-BAL              PIC S9(11) COMP-3 VALUE ZERO.
-       77  WS-CONTROL              PIC S9(11) COMP-3 VALUE ZERO.
        77  WS-DIFF                 PIC S9(11) COMP-3.
+      *    THE TWO AMOUNTS OF A TRIAL BALANCE LINE OR A CHECK LINE
+       77  WS-LEFT                 PIC S9(11) COMP-3.
+       77  WS-RIGHT                PIC S9(11) COMP-3.
+      *
+      * CENTS TO DOLLARS FOR PRINTING: THE SAME 6 BYTES READ WITH TWO
+      * DECIMALS ARE CENTS / 100. NO ARITHMETIC, NO ROUNDING.
+      *
+       01  WS-CENTS                PIC S9(11) COMP-3.
+       01  WS-DOLLARS REDEFINES WS-CENTS PIC S9(9)V99 COMP-3.
+      *
+      * TOTALS OF THE ACCOUNT BALANCES BY UNIT (1 = RU, 2 = USD).
+      * UT-BAL IS THE TOTAL OF THE SUBSIDIARY LEDGER OF THE UNIT.
+      *
+       01  UNIT-TOTALS.
+           05  UT-ENTRY            OCCURS 2 TIMES.
+               10  UT-PRIOR        PIC S9(11) COMP-3.
+               10  UT-ALLOC        PIC S9(11) COMP-3.
+               10  UT-USED         PIC S9(11) COMP-3.
+               10  UT-BAL          PIC S9(11) COMP-3.
+       01  UNIT-INIT.
+           05  FILLER              PIC X(3)  VALUE 'RU '.
+           05  FILLER              PIC X(50)
+                   VALUE 'UNIT: RU (RESOURCE UNIT)'.
+           05  FILLER              PIC X(3)  VALUE 'USD'.
+           05  FILLER              PIC X(50)
+                   VALUE 'UNIT: USD (AI AGENT COST, DOLLARS AND CENTS)'.
+       01  UNIT-TABLE REDEFINES UNIT-INIT.
+           05  UNIT-ENTRY          OCCURS 2 TIMES.
+               10  UNIT-NAME       PIC X(3).
+               10  UNIT-TITLE      PIC X(50).
       *
       * ACCOUNT MASTER RECORD (SUBSIDIARY LEDGER), 100 BYTES
       *
@@ -247,9 +292,14 @@
            05  WS-ACCT-CLS         PIC X(3).
            05  WS-ACCT-SER         PIC X(7).
       *
-      * GENERAL LEDGER: 1 = 1100 ALLOCATION SOURCE (DEBIT BALANCE),
-      * 2 = 2100 ACCOUNTS (CONTROL ACCOUNT, CREDIT BALANCE),
-      * 3 = 4100 USAGE (CREDIT BALANCE)
+      * GENERAL LEDGER, THREE ACCOUNTS FOR EACH UNIT. FOR UNIT U THE
+      * ALLOCATION SOURCE (DEBIT BALANCE) IS U * 3 - 2, THE CONTROL
+      * ACCOUNT OF THE USER ACCOUNTS (CREDIT BALANCE) IS U * 3 - 1 AND
+      * THE USAGE (CREDIT BALANCE) IS U * 3.
+      *   RU : 1100 ALLOCATION SOURCE, 2100 ACCOUNTS, 4100 USAGE
+      *   USD: 1200 AI ALLOCATION SOURCE, 2200 AI ACCOUNTS,
+      *        4200 AI USAGE
+      * AN ACCOUNT NOT IN THE OLD GL (ADDED LATER) STARTS FROM ZERO.
       *
        01  GL-INIT.
            05  FILLER              PIC X(20)
@@ -258,12 +308,18 @@
                    VALUE '2100USER ACCOUNTS   '.
            05  FILLER              PIC X(20)
                    VALUE '4100USAGE           '.
+           05  FILLER              PIC X(20)
+                   VALUE '1200AI ALLOC SOURCE '.
+           05  FILLER              PIC X(20)
+                   VALUE '2200AI USER ACCOUNTS'.
+           05  FILLER              PIC X(20)
+                   VALUE '4200AI USAGE        '.
        01  GL-INIT-TABLE REDEFINES GL-INIT.
-           05  GLI-ENTRY           OCCURS 3 TIMES.
+           05  GLI-ENTRY           OCCURS 6 TIMES.
                10  GLI-CODE        PIC X(4).
                10  GLI-NAME        PIC X(16).
        01  GL-TABLE.
-           05  GL-ENTRY            OCCURS 3 TIMES.
+           05  GL-ENTRY            OCCURS 6 TIMES.
                10  GL-CODE         PIC X(4).
                10  GL-NAME         PIC X(16).
                10  GL-DEBIT        PIC S9(11) COMP-3.
@@ -275,6 +331,7 @@
                10  OD-CLASS        PIC X(5).
                10  OD-NAME         PIC X(24).
                10  OD-BAL          PIC S9(11) COMP-3.
+               10  OD-UNIT         PIC 9.
       *
       * REPORT LINES. EVERY LINE STARTS WITH 1 BYTE RESERVED FOR THE
       * CARRIAGE CONTROL CHARACTER SET BY WRITE ... ADVANCING.
@@ -309,7 +366,7 @@
            05  FILLER              PIC X(33) VALUE
                '    ALLOCATED            USED    '.
            05  FILLER              PIC X(33) VALUE
-               '     BALANCE  ST                 '.
+               '     BALANCE UNIT ST             '.
        01  BAL-HDR-2.
            05  FILLER              PIC X     VALUE SPACE.
            05  FILLER              PIC X(33) VALUE
@@ -319,15 +376,15 @@
            05  FILLER              PIC X(33) VALUE
                '------------- --------------- ---'.
            05  FILLER              PIC X(33) VALUE
-               '------------  --                 '.
+               '------------ ---- --             '.
        01  OD-HDR-1.
            05  FILLER              PIC X     VALUE SPACE.
            05  FILLER              PIC X(33) VALUE
                ' ACCOUNT NO   CLASS  NAME        '.
            05  FILLER              PIC X(33) VALUE
-               '                      BALANCE    '.
+               '                      BALANCE UNI'.
            05  FILLER              PIC X(33) VALUE
-               '                                 '.
+               'T                                '.
            05  FILLER              PIC X(33) VALUE
                '                                 '.
        01  OD-HDR-2.
@@ -335,9 +392,9 @@
            05  FILLER              PIC X(33) VALUE
                ' -----------  -----  ------------'.
            05  FILLER              PIC X(33) VALUE
-               '------------  ---------------    '.
+               '------------  --------------- ---'.
            05  FILLER              PIC X(33) VALUE
-               '                                 '.
+               '-                                '.
            05  FILLER              PIC X(33) VALUE
                '                                 '.
        01  TB-HDR-1.
@@ -372,16 +429,23 @@
            05  FILLER              PIC XX    VALUE SPACES.
            05  D-NAME              PIC X(24).
            05  FILLER              PIC XX    VALUE SPACES.
+      *    AMOUNTS: RU AS THEY ARE, USD IN DOLLARS (THE -U FIELDS)
            05  D-PRIOR             PIC ---,---,---,--9.
+           05  D-PRIOR-U REDEFINES D-PRIOR PIC ----,---,--9.99.
            05  FILLER              PIC XX    VALUE SPACES.
            05  D-ALLOC             PIC ---,---,---,--9.
+           05  D-ALLOC-U REDEFINES D-ALLOC PIC ----,---,--9.99.
            05  FILLER              PIC X     VALUE SPACES.
            05  D-USED              PIC ---,---,---,--9.
+           05  D-USED-U REDEFINES D-USED PIC ----,---,--9.99.
            05  FILLER              PIC X     VALUE SPACES.
            05  D-BAL               PIC ---,---,---,--9.
+           05  D-BAL-U REDEFINES D-BAL PIC ----,---,--9.99.
+           05  FILLER              PIC X     VALUE SPACES.
+           05  D-UNIT              PIC X(3).
            05  FILLER              PIC XX    VALUE SPACES.
            05  D-ST                PIC X(4).
-           05  FILLER              PIC X(15) VALUE SPACES.
+           05  FILLER              PIC X(11) VALUE SPACES.
        01  OD-LINE.
            05  FILLER              PIC X     VALUE SPACE.
            05  FILLER              PIC X     VALUE SPACE.
@@ -395,7 +459,10 @@
            05  O-NAME              PIC X(24).
            05  FILLER              PIC XX    VALUE SPACES.
            05  O-BAL               PIC ---,---,---,--9.
-           05  FILLER              PIC X(70) VALUE SPACES.
+           05  O-BAL-U REDEFINES O-BAL PIC ----,---,--9.99.
+           05  FILLER              PIC X     VALUE SPACES.
+           05  O-UNIT              PIC X(3).
+           05  FILLER              PIC X(66) VALUE SPACES.
        01  TB-LINE.
            05  FILLER              PIC X     VALUE SPACE.
            05  FILLER              PIC X     VALUE SPACE.
@@ -404,20 +471,31 @@
            05  TB-NAME             PIC X(16).
            05  FILLER              PIC XX    VALUE SPACES.
            05  TB-DEBIT            PIC ---,---,---,--9.
+           05  TB-DEBIT-U REDEFINES TB-DEBIT PIC ----,---,--9.99.
            05  FILLER              PIC XX    VALUE SPACES.
            05  TB-CREDIT           PIC ---,---,---,--9.
+           05  TB-CREDIT-U REDEFINES TB-CREDIT PIC ----,---,--9.99.
            05  FILLER              PIC XX    VALUE SPACES.
            05  TB-DR-BAL           PIC ---,---,---,--9.
+           05  TB-DR-BAL-U REDEFINES TB-DR-BAL PIC ----,---,--9.99.
            05  FILLER              PIC XX    VALUE SPACES.
            05  TB-CR-BAL           PIC ---,---,---,--9.
+           05  TB-CR-BAL-U REDEFINES TB-CR-BAL PIC ----,---,--9.99.
            05  FILLER              PIC X(41) VALUE SPACES.
        01  CHECK-LINE.
            05  FILLER              PIC X     VALUE SPACE.
            05  FILLER              PIC X     VALUE SPACE.
            05  C-TEXT              PIC X(45).
+      *    THE GL ACCOUNT IN 'CONTROL ACCOUNT XXXX : ...'
+           05  C-TEXT-R REDEFINES C-TEXT.
+               10  FILLER          PIC X(16).
+               10  C-TEXT-CODE     PIC X(4).
+               10  FILLER          PIC X(25).
            05  C-LEFT              PIC ---,---,---,--9.
+           05  C-LEFT-U REDEFINES C-LEFT PIC ----,---,--9.99.
            05  FILLER              PIC X(3)  VALUE ' : '.
            05  C-RIGHT             PIC ---,---,---,--9.
+           05  C-RIGHT-U REDEFINES C-RIGHT PIC ----,---,--9.99.
            05  FILLER              PIC XX    VALUE SPACES.
            05  C-RESULT            PIC X(5).
            05  FILLER              PIC X(46) VALUE SPACES.
@@ -441,6 +519,9 @@
                        REPORT-FILE.
            PERFORM LOAD-CTL THRU LOAD-CTL-EXIT.
            PERFORM LOAD-GL THRU LOAD-GL-EXIT.
+           MOVE ZERO TO UT-PRIOR (1) UT-ALLOC (1) UT-USED (1)
+                        UT-BAL (1) UT-PRIOR (2) UT-ALLOC (2)
+                        UT-USED (2) UT-BAL (2).
            PERFORM READ-DEF THRU READ-DEF-EXIT.
            PERFORM READ-OM THRU READ-OM-EXIT.
            PERFORM READ-TR THRU READ-TR-EXIT.
@@ -490,13 +571,13 @@
       *
        LOAD-GL.
            PERFORM INIT-GL THRU INIT-GL-EXIT
-               VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 3.
+               VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 6.
        LOAD-GL-READ.
            READ OLDGL-FILE AT END GO TO LOAD-GL-EXIT.
            PERFORM FIND-GL THRU FIND-GL-EXIT
                VARYING WS-I FROM 1 BY 1
-               UNTIL WS-I > 3 OR GL-CODE (WS-I) = OG-CODE.
-           IF WS-I > 3
+               UNTIL WS-I > 6 OR GL-CODE (WS-I) = OG-CODE.
+           IF WS-I > 6
                DISPLAY 'POSTING: UNKNOWN GL ACCOUNT ' OG-CODE
                MOVE 'Y' TO WS-ERROR
                GO TO LOAD-GL-READ.
@@ -551,6 +632,15 @@
            MOVE WS-DEF-KEY TO WS-CUR-KEY.
            IF WS-OM-KEY < WS-CUR-KEY MOVE WS-OM-KEY TO WS-CUR-KEY.
            IF WS-TR-KEY < WS-CUR-KEY MOVE WS-TR-KEY TO WS-CUR-KEY.
+      *    THE UNIT AND THE GL ACCOUNTS OF THE ACCOUNT
+           MOVE WS-CUR-KEY TO WS-ACCT-SPLIT.
+           IF WS-ACCT-CLS = '300'
+               MOVE 2 TO WS-U
+           ELSE
+               MOVE 1 TO WS-U.
+           COMPUTE WS-GSRC = WS-U * 3 - 2.
+           COMPUTE WS-GCTL = WS-U * 3 - 1.
+           COMPUTE WS-GUSE = WS-U * 3.
            MOVE 'N' TO WS-MATCH-DEF WS-MATCH-OM.
            IF WS-DEF-KEY = WS-CUR-KEY MOVE 'Y' TO WS-MATCH-DEF.
            IF WS-OM-KEY = WS-CUR-KEY MOVE 'Y' TO WS-MATCH-OM.
@@ -571,16 +661,18 @@
                MOVE 'U' TO NM-STATUS.
            MOVE NM-BAL TO WS-PRIOR.
            MOVE ZERO TO WS-PALLOC WS-PUSED.
+      *    A NEW ACCOUNT: THE OPENING ALLOCATION, IF IT HAS ONE
            IF WS-MATCH-OM = 'N' AND WS-MATCH-DEF = 'Y'
-               MOVE A-ALLOT TO WS-AMT
-               MOVE WS-FROM-YMD TO WS-JDATE
-               MOVE 'O' TO WS-JTYPE
-               PERFORM POST-ALLOC THRU POST-ALLOC-EXIT.
+               IF A-ALLOT > ZERO
+                   MOVE A-ALLOT TO WS-AMT
+                   MOVE WS-FROM-YMD TO WS-JDATE
+                   MOVE 'O' TO WS-JTYPE
+                   PERFORM POST-ALLOC THRU POST-ALLOC-EXIT.
            PERFORM APPLY-TRAN THRU APPLY-TRAN-EXIT
                UNTIL WS-TR-KEY NOT = WS-CUR-KEY.
            WRITE NM-OUT FROM NM-REC.
            ADD 1 TO WS-ACCT-CNT.
-           ADD NM-BAL TO SUB-TOTAL.
+           ADD NM-BAL TO UT-BAL (WS-U).
            PERFORM BAL-LINE-OUT THRU BAL-LINE-OUT-EXIT.
            IF WS-MATCH-DEF = 'Y'
                PERFORM READ-DEF THRU READ-DEF-EXIT.
@@ -601,25 +693,27 @@
        APPLY-TRAN-EXIT.
            EXIT.
       *
-      * ALLOCATION: DEBIT 1100 ALLOCATION SOURCE / CREDIT 2100 ACCOUNTS
+      * ALLOCATION: DEBIT ALLOCATION SOURCE (1100 / 1200)
+      *             CREDIT ACCOUNTS (2100 / 2200)
       *
        POST-ALLOC.
            ADD WS-AMT TO NM-BAL NM-ALLOC WS-PALLOC.
-           ADD WS-AMT TO GL-DEBIT (1) GL-CREDIT (2).
-           MOVE '1100' TO WS-JDR.
-           MOVE '2100' TO WS-JCR.
+           ADD WS-AMT TO GL-DEBIT (WS-GSRC) GL-CREDIT (WS-GCTL).
+           MOVE GL-CODE (WS-GSRC) TO WS-JDR.
+           MOVE GL-CODE (WS-GCTL) TO WS-JCR.
            PERFORM WRITE-JOURNAL THRU WRITE-JOURNAL-EXIT.
        POST-ALLOC-EXIT.
            EXIT.
       *
-      * USAGE: DEBIT 2100 ACCOUNTS / CREDIT 4100 USAGE
+      * USAGE: DEBIT ACCOUNTS (2100 / 2200)
+      *        CREDIT USAGE (4100 / 4200)
       *
        POST-USE.
            SUBTRACT WS-AMT FROM NM-BAL.
            ADD WS-AMT TO NM-USED WS-PUSED.
-           ADD WS-AMT TO GL-DEBIT (2) GL-CREDIT (3).
-           MOVE '2100' TO WS-JDR.
-           MOVE '4100' TO WS-JCR.
+           ADD WS-AMT TO GL-DEBIT (WS-GCTL) GL-CREDIT (WS-GUSE).
+           MOVE GL-CODE (WS-GCTL) TO WS-JDR.
+           MOVE GL-CODE (WS-GUSE) TO WS-JCR.
            PERFORM WRITE-JOURNAL THRU WRITE-JOURNAL-EXIT.
        POST-USE-EXIT.
            EXIT.
@@ -657,21 +751,19 @@
            MOVE WS-ACCT-SER TO D-ACCT-SER.
            MOVE NM-CLASS TO D-CLASS.
            MOVE NM-NAME TO D-NAME.
-           MOVE WS-PRIOR TO D-PRIOR.
-           MOVE WS-PALLOC TO D-ALLOC.
-           MOVE WS-PUSED TO D-USED.
-           MOVE NM-BAL TO D-BAL.
+           PERFORM BAL-AMOUNTS THRU BAL-AMOUNTS-EXIT.
            MOVE SPACES TO D-ST.
            IF NM-STATUS = 'U'
                MOVE 'U' TO D-ST.
-           IF NM-BAL < ZERO
+      *    AN ACCOUNT NEVER ALLOCATED (ALLOCATION ZERO) IS NOT OVERDRAWN
+           IF NM-BAL < ZERO AND NM-ALLOC NOT = ZERO
                MOVE '*' TO D-ST
                PERFORM ADD-OVERDRAWN THRU ADD-OVERDRAWN-EXIT.
            WRITE REPORT-REC FROM BAL-LINE AFTER ADVANCING 1 LINES.
            ADD 1 TO WS-LINES.
-           ADD WS-PRIOR TO TOT-PRIOR.
-           ADD WS-PALLOC TO TOT-ALLOC.
-           ADD WS-PUSED TO TOT-USED.
+           ADD WS-PRIOR TO UT-PRIOR (WS-U).
+           ADD WS-PALLOC TO UT-ALLOC (WS-U).
+           ADD WS-PUSED TO UT-USED (WS-U).
        BAL-LINE-OUT-EXIT.
            EXIT.
        ADD-OVERDRAWN.
@@ -680,22 +772,58 @@
                MOVE NM-ACCT TO OD-ACCT (OD-COUNT)
                MOVE NM-CLASS TO OD-CLASS (OD-COUNT)
                MOVE NM-NAME TO OD-NAME (OD-COUNT)
-               MOVE NM-BAL TO OD-BAL (OD-COUNT).
+               MOVE NM-BAL TO OD-BAL (OD-COUNT)
+               MOVE WS-U TO OD-UNIT (OD-COUNT).
        ADD-OVERDRAWN-EXIT.
            EXIT.
+      *    THE AMOUNTS OF THE LINE IN THE UNIT OF THE ACCOUNT
+       BAL-AMOUNTS.
+           MOVE UNIT-NAME (WS-U) TO D-UNIT.
+           IF WS-U = 1
+               MOVE WS-PRIOR TO D-PRIOR
+               MOVE WS-PALLOC TO D-ALLOC
+               MOVE WS-PUSED TO D-USED
+               MOVE NM-BAL TO D-BAL
+               GO TO BAL-AMOUNTS-EXIT.
+           MOVE WS-PRIOR TO WS-CENTS.
+           MOVE WS-DOLLARS TO D-PRIOR-U.
+           MOVE WS-PALLOC TO WS-CENTS.
+           MOVE WS-DOLLARS TO D-ALLOC-U.
+           MOVE WS-PUSED TO WS-CENTS.
+           MOVE WS-DOLLARS TO D-USED-U.
+           MOVE NM-BAL TO WS-CENTS.
+           MOVE WS-DOLLARS TO D-BAL-U.
+       BAL-AMOUNTS-EXIT.
+           EXIT.
+      *    ONE TOTAL LINE FOR EACH UNIT. AMOUNTS OF DIFFERENT UNITS ARE
+      *    NOT ADDED TOGETHER.
        BAL-TOTAL.
-           MOVE SPACES TO D-ACCT D-CLASS D-ST.
-           MOVE 'TOTAL' TO D-NAME.
-           MOVE TOT-PRIOR TO D-PRIOR.
-           MOVE TOT-ALLOC TO D-ALLOC.
-           MOVE TOT-USED TO D-USED.
-           MOVE SUB-TOTAL TO D-BAL.
            WRITE REPORT-REC FROM BLANK-LINE AFTER ADVANCING 1 LINES.
-           WRITE REPORT-REC FROM BAL-LINE AFTER ADVANCING 1 LINES.
+           PERFORM BAL-TOTAL-UNIT THRU BAL-TOTAL-UNIT-EXIT
+               VARYING WS-U FROM 1 BY 1 UNTIL WS-U > 2.
            MOVE 'ST: * = OVERDRAWN (NEGATIVE BALANCE), U = NOT DEFINED'
                TO M-TEXT.
            WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 2 LINES.
+           MOVE 'AN ACCOUNT WITHOUT ALLOCATION IS NOT OVERDRAWN'
+               TO M-TEXT.
+           WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 1 LINES.
+           MOVE 'UNIT: RU, OR USD IN DOLLARS AND CENTS (CLASS AGENT)'
+               TO M-TEXT.
+           WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 1 LINES.
        BAL-TOTAL-EXIT.
+           EXIT.
+      *    THE MASTER RECORD IS WRITTEN ALREADY, SO ITS FIELDS ARE FREE
+      *    TO CARRY THE TOTALS TO BAL-AMOUNTS
+       BAL-TOTAL-UNIT.
+           MOVE SPACES TO D-ACCT D-CLASS D-ST.
+           MOVE 'TOTAL' TO D-NAME.
+           MOVE UT-PRIOR (WS-U) TO WS-PRIOR.
+           MOVE UT-ALLOC (WS-U) TO WS-PALLOC.
+           MOVE UT-USED (WS-U) TO WS-PUSED.
+           MOVE UT-BAL (WS-U) TO NM-BAL.
+           PERFORM BAL-AMOUNTS THRU BAL-AMOUNTS-EXIT.
+           WRITE REPORT-REC FROM BAL-LINE AFTER ADVANCING 1 LINES.
+       BAL-TOTAL-UNIT-EXIT.
            EXIT.
       *
       * REPORT: OVERDRAWN ACCOUNTS (NEGATIVE BALANCE)
@@ -722,12 +850,18 @@
            MOVE WS-ACCT-SER TO O-ACCT-SER.
            MOVE OD-CLASS (WS-I) TO O-CLASS.
            MOVE OD-NAME (WS-I) TO O-NAME.
-           MOVE OD-BAL (WS-I) TO O-BAL.
+           MOVE OD-UNIT (WS-I) TO WS-U.
+           MOVE UNIT-NAME (WS-U) TO O-UNIT.
+           IF WS-U = 1
+               MOVE OD-BAL (WS-I) TO O-BAL
+           ELSE
+               MOVE OD-BAL (WS-I) TO WS-CENTS
+               MOVE WS-DOLLARS TO O-BAL-U.
            WRITE REPORT-REC FROM OD-LINE AFTER ADVANCING 1 LINES.
        OD-LINE-OUT-EXIT.
            EXIT.
       *
-      * REPORT: TRIAL BALANCE AND THE CHECKS
+      * REPORT: TRIAL BALANCE AND THE CHECKS, ONE SECTION FOR EACH UNIT
       *
        PRINT-TRIAL.
            MOVE 'TRIAL BALANCE' TO H1-TITLE.
@@ -735,70 +869,120 @@
            MOVE WS-PAGE TO H1-PAGE.
            WRITE REPORT-REC FROM HDR-1 AFTER ADVANCING TOP-OF-PAGE.
            WRITE REPORT-REC FROM HDR-2 AFTER ADVANCING 1 LINES.
-           WRITE REPORT-REC FROM TB-HDR-1 AFTER ADVANCING 2 LINES.
-           WRITE REPORT-REC FROM TB-HDR-2 AFTER ADVANCING 1 LINES.
-           PERFORM TB-LINE-OUT THRU TB-LINE-OUT-EXIT
-               VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 3.
-           MOVE SPACES TO TB-CODE.
-           MOVE 'TOTAL' TO TB-NAME.
-           MOVE TOT-DEBIT TO TB-DEBIT.
-           MOVE TOT-CREDIT TO TB-CREDIT.
-           MOVE TOT-DR-BAL TO TB-DR-BAL.
-           MOVE TOT-CR-BAL TO TB-CR-BAL.
-           WRITE REPORT-REC FROM BLANK-LINE AFTER ADVANCING 1 LINES.
-           WRITE REPORT-REC FROM TB-LINE AFTER ADVANCING 1 LINES.
-      *    CHECK 1: DEBIT TOTAL = CREDIT TOTAL
-           MOVE 'DEBIT TOTAL : CREDIT TOTAL' TO C-TEXT.
-           MOVE TOT-DEBIT TO C-LEFT.
-           MOVE TOT-CREDIT TO C-RIGHT.
-           IF TOT-DEBIT = TOT-CREDIT
-               MOVE 'OK' TO C-RESULT
-           ELSE
-               MOVE 'ERROR' TO C-RESULT
-               MOVE 'Y' TO WS-ERROR.
-           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 3 LINES.
-      *    CHECK 2: CONTROL ACCOUNT 2100 = SUBSIDIARY LEDGER TOTAL
-           COMPUTE WS-CONTROL = GL-CREDIT (2) - GL-DEBIT (2).
-           MOVE 'CONTROL ACCOUNT 2100 : SUBSIDIARY LEDGER' TO C-TEXT.
-           MOVE WS-CONTROL TO C-LEFT.
-           MOVE SUB-TOTAL TO C-RIGHT.
-           IF WS-CONTROL = SUB-TOTAL
-               MOVE 'OK' TO C-RESULT
-           ELSE
-               MOVE 'ERROR' TO C-RESULT
-               MOVE 'Y' TO WS-ERROR.
-           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 1 LINES.
+           PERFORM TRIAL-UNIT THRU TRIAL-UNIT-EXIT
+               VARYING WS-U FROM 1 BY 1 UNTIL WS-U > 2.
            IF WS-ERROR = 'Y'
                MOVE '*** CHECK FAILED. THE CLOSING IS NOT COMMITTED ***'
                    TO M-TEXT
            ELSE
                MOVE 'ALL CHECKS PASSED' TO M-TEXT.
-           WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 2 LINES.
+           WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 3 LINES.
            WRITE REPORT-REC FROM END-LINE AFTER ADVANCING 3 LINES.
        PRINT-TRIAL-EXIT.
+           EXIT.
+       TRIAL-UNIT.
+           COMPUTE WS-GSRC = WS-U * 3 - 2.
+           COMPUTE WS-GCTL = WS-U * 3 - 1.
+           COMPUTE WS-GUSE = WS-U * 3.
+           MOVE ZERO TO TOT-DEBIT TOT-CREDIT TOT-DR-BAL TOT-CR-BAL.
+           MOVE UNIT-TITLE (WS-U) TO M-TEXT.
+           WRITE REPORT-REC FROM MSG-LINE AFTER ADVANCING 3 LINES.
+           WRITE REPORT-REC FROM TB-HDR-1 AFTER ADVANCING 2 LINES.
+           WRITE REPORT-REC FROM TB-HDR-2 AFTER ADVANCING 1 LINES.
+           PERFORM TB-LINE-OUT THRU TB-LINE-OUT-EXIT
+               VARYING WS-I FROM WS-GSRC BY 1 UNTIL WS-I > WS-GUSE.
+           MOVE SPACES TO TB-CODE.
+           MOVE 'TOTAL' TO TB-NAME.
+           MOVE TOT-DEBIT TO WS-LEFT.
+           MOVE TOT-CREDIT TO WS-RIGHT.
+           PERFORM TB-TOTALS THRU TB-TOTALS-EXIT.
+           MOVE TOT-DR-BAL TO WS-LEFT.
+           MOVE TOT-CR-BAL TO WS-RIGHT.
+           PERFORM TB-BALANCES THRU TB-BALANCES-EXIT.
+           WRITE REPORT-REC FROM BLANK-LINE AFTER ADVANCING 1 LINES.
+           WRITE REPORT-REC FROM TB-LINE AFTER ADVANCING 1 LINES.
+      *    CHECK 1: DEBIT TOTAL = CREDIT TOTAL OF THE UNIT
+           MOVE 'DEBIT TOTAL : CREDIT TOTAL' TO C-TEXT.
+           MOVE TOT-DEBIT TO WS-LEFT.
+           MOVE TOT-CREDIT TO WS-RIGHT.
+           PERFORM CHECK-OUT THRU CHECK-OUT-EXIT.
+      *    CHECK 2: CONTROL ACCOUNT (2100 / 2200) = SUBSIDIARY LEDGER
+      *    TOTAL OF THE UNIT
+           MOVE 'CONTROL ACCOUNT XXXX : SUBSIDIARY LEDGER' TO C-TEXT.
+           MOVE GL-CODE (WS-GCTL) TO C-TEXT-CODE.
+           COMPUTE WS-LEFT = GL-CREDIT (WS-GCTL) - GL-DEBIT (WS-GCTL).
+           MOVE UT-BAL (WS-U) TO WS-RIGHT.
+           PERFORM CHECK-OUT THRU CHECK-OUT-EXIT.
+       TRIAL-UNIT-EXIT.
            EXIT.
        TB-LINE-OUT.
            MOVE GL-CODE (WS-I) TO TB-CODE.
            MOVE GL-NAME (WS-I) TO TB-NAME.
-           MOVE GL-DEBIT (WS-I) TO TB-DEBIT.
-           MOVE GL-CREDIT (WS-I) TO TB-CREDIT.
            ADD GL-DEBIT (WS-I) TO TOT-DEBIT.
            ADD GL-CREDIT (WS-I) TO TOT-CREDIT.
+           MOVE GL-DEBIT (WS-I) TO WS-LEFT.
+           MOVE GL-CREDIT (WS-I) TO WS-RIGHT.
+           PERFORM TB-TOTALS THRU TB-TOTALS-EXIT.
+      *    THE BALANCE GOES TO THE DEBIT OR THE CREDIT SIDE
            COMPUTE WS-DIFF = GL-DEBIT (WS-I) - GL-CREDIT (WS-I).
-           MOVE ZERO TO TB-DR-BAL TB-CR-BAL.
+           MOVE ZERO TO WS-LEFT WS-RIGHT.
            IF WS-DIFF NOT < ZERO
-               MOVE WS-DIFF TO TB-DR-BAL
-               ADD WS-DIFF TO TOT-DR-BAL
+               MOVE WS-DIFF TO WS-LEFT
            ELSE
-               COMPUTE WS-DIFF = ZERO - WS-DIFF
-               MOVE WS-DIFF TO TB-CR-BAL
-               ADD WS-DIFF TO TOT-CR-BAL.
+               COMPUTE WS-RIGHT = ZERO - WS-DIFF.
+           ADD WS-LEFT TO TOT-DR-BAL.
+           ADD WS-RIGHT TO TOT-CR-BAL.
+           PERFORM TB-BALANCES THRU TB-BALANCES-EXIT.
            WRITE REPORT-REC FROM TB-LINE AFTER ADVANCING 1 LINES.
        TB-LINE-OUT-EXIT.
            EXIT.
+      *    THE DEBIT (WS-LEFT) AND CREDIT (WS-RIGHT) TOTALS OF A TRIAL
+      *    BALANCE LINE, IN THE UNIT WS-U
+       TB-TOTALS.
+           IF WS-U = 1
+               MOVE WS-LEFT TO TB-DEBIT
+               MOVE WS-RIGHT TO TB-CREDIT
+               GO TO TB-TOTALS-EXIT.
+           MOVE WS-LEFT TO WS-CENTS.
+           MOVE WS-DOLLARS TO TB-DEBIT-U.
+           MOVE WS-RIGHT TO WS-CENTS.
+           MOVE WS-DOLLARS TO TB-CREDIT-U.
+       TB-TOTALS-EXIT.
+           EXIT.
+      *    THE DEBIT (WS-LEFT) AND CREDIT (WS-RIGHT) BALANCES OF A
+      *    TRIAL BALANCE LINE, IN THE UNIT WS-U
+       TB-BALANCES.
+           IF WS-U = 1
+               MOVE WS-LEFT TO TB-DR-BAL
+               MOVE WS-RIGHT TO TB-CR-BAL
+               GO TO TB-BALANCES-EXIT.
+           MOVE WS-LEFT TO WS-CENTS.
+           MOVE WS-DOLLARS TO TB-DR-BAL-U.
+           MOVE WS-RIGHT TO WS-CENTS.
+           MOVE WS-DOLLARS TO TB-CR-BAL-U.
+       TB-BALANCES-EXIT.
+           EXIT.
+      *    A CHECK: WS-LEFT = WS-RIGHT, PRINTED IN THE UNIT WS-U
+       CHECK-OUT.
+           IF WS-U = 1
+               MOVE WS-LEFT TO C-LEFT
+               MOVE WS-RIGHT TO C-RIGHT
+           ELSE
+               MOVE WS-LEFT TO WS-CENTS
+               MOVE WS-DOLLARS TO C-LEFT-U
+               MOVE WS-RIGHT TO WS-CENTS
+               MOVE WS-DOLLARS TO C-RIGHT-U.
+           IF WS-LEFT = WS-RIGHT
+               MOVE 'OK' TO C-RESULT
+           ELSE
+               MOVE 'ERROR' TO C-RESULT
+               MOVE 'Y' TO WS-ERROR.
+           WRITE REPORT-REC FROM CHECK-LINE AFTER ADVANCING 1 LINES.
+       CHECK-OUT-EXIT.
+           EXIT.
        WRITE-GL.
            PERFORM WRITE-GL-ONE THRU WRITE-GL-ONE-EXIT
-               VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 3.
+               VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 6.
        WRITE-GL-EXIT.
            EXIT.
        WRITE-GL-ONE.

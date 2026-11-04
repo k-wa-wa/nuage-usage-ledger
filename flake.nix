@@ -71,6 +71,13 @@
           }
           touch $out
         '';
+        # USAGEGET を Linux 上の REXX (Regina) で動かし、端数処理・レコードの桁・日付・接続数を確かめる
+        usageget = pkgs.runCommandLocal "check-usageget" {
+          nativeBuildInputs = [ pkgs.python3 pkgs.regina ];
+        } ''
+          python3 ${./tests/usageget_test.py} ${./mvs/USAGEGET.rexx}
+          touch $out
+        '';
         # cicerone3270 の辞書が TOML として読めるか
         guide = pkgs.runCommandLocal "check-guide" { nativeBuildInputs = [ pkgs.python3 ]; } ''
           python3 -c 'import sys, tomllib; [tomllib.load(open(f, "rb")) for f in sys.argv[1:]]' ${./guide}/*.toml
