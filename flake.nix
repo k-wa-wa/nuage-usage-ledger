@@ -61,6 +61,10 @@
           cp ${./mvs/datasets.json} $out/datasets.json
           cp -r ${./guide} $out/cicerone3270
         '';
+
+        mainframe-job-metrics = pkgs.writers.writePython3Bin "mainframe-job-metrics" {
+          flakeIgnore = [ "E501" ];
+        } (builtins.readFile ./scripts/job_metrics.py);
       });
 
       # カード (80 桁) と MVS の制約に合っているかを検査する (nix flake check)
@@ -74,6 +78,16 @@
         # cicerone3270 の辞書が TOML として読めるか
         guide = pkgs.runCommandLocal "check-guide" { nativeBuildInputs = [ pkgs.python3 ]; } ''
           python3 -c 'import sys, tomllib; [tomllib.load(open(f, "rb")) for f in sys.argv[1:]]' ${./guide}/*.toml
+          touch $out
+        '';
+        # MVS ジョブ監視スクリプトの単体テスト
+        job-metrics = pkgs.runCommandLocal "test-job-metrics" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+          mkdir -p src/scripts src/tests
+          cp ${./scripts/job_metrics.py} src/scripts/job_metrics.py
+          cp ${./tests/test_job_metrics.py} src/tests/test_job_metrics.py
+          touch src/scripts/__init__.py src/tests/__init__.py
+          cd src
+          python3 -m unittest discover -s tests
           touch $out
         '';
       });

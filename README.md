@@ -73,6 +73,7 @@
 | `guide/ledger.toml` | 3270 端末の案内 [cicerone3270](https://github.com/k-wa-wa/cicerone3270) に足す辞書。オンラインの画面 (LLST・LBAL) の説明、データセットの説明と、勘定マスタ・仕訳・総勘定元帳・業務日付・照会用ファイルのレコード定義 (ブラウズ画面で項目名と値を出す) |
 | `flake.nix` | 上をまとめて、nuage-cluster に渡す資材を作る |
 | `scripts/check_mvs_sources.py` | カード (80 桁) と MVS の制約の検査 (`nix flake check`) |
+| `scripts/job_metrics.py` | MVS ジョブの成否をログから読み取り、Prometheus メトリクスを書き出す (`mainframe-job-metrics`) |
 
 ## nuage-cluster との約束事
 
@@ -86,6 +87,9 @@ datasets.json                          無ければ作るデータセット
 build/<ジョブ名>                        内容が変わったら流すビルドジョブ (オンラインの LEDGBLD)
 cicerone3270/                          3270 端末の案内に足す辞書
 ```
+
+また、ジョブ監視用メトリクスエクスポータ `packages.mainframe-job-metrics` (`scripts/job_metrics.py`) も提供する。
+nuage-cluster の `mainframe-job-metrics.service` から呼び出される。
 
 KICKS の導入と、ビルドジョブを流すのは nuage-cluster の mvs-config が行う。
 
