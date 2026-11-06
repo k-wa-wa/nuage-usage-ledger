@@ -24,22 +24,71 @@ class TestJobMetrics(unittest.TestCase):
         self.assertFalse(is_success("USAGERPT", 0, [], False, False))
 
     def test_is_success_ledger(self):
-        # RC 0
-        self.assertTrue(is_success("LEDGER", 0, [("EXEC", 0), ("TRANGEN", 0)], False, False))
+        # RC 0 (全ステップ正常: GET, TRANGEN(COB/GO), SORT, POSTING(COB/GO), COMMIT...)
+        self.assertTrue(
+            is_success(
+                "LEDGER",
+                0,
+                [
+                    ("EXEC", 0),
+                    ("COB", 0),
+                    ("GO", 0),
+                    ("SORT", 0),
+                    ("COB", 0),
+                    ("GO", 0),
+                    ("MONTHLY", 0),
+                ],
+                False,
+                False,
+            )
+        )
         # 締める日がない場合の正常スキップ (EXEC RC 4 のみ)
         self.assertTrue(is_success("LEDGER", 4, [("EXEC", 4)], False, False))
-        # 他のステップでの RC 4 は失敗
-        self.assertFalse(is_success("LEDGER", 4, [("EXEC", 0), ("TRANGEN", 4)], False, False))
-        # RC 16
-        self.assertFalse(is_success("LEDGER", 16, [("EXEC", 0), ("POSTING", 16)], False, False))
+        # 他のステップでの RC 4 は失敗 (例: TRANGEN の GO が 4)
+        self.assertFalse(
+            is_success(
+                "LEDGER",
+                4,
+                [("EXEC", 0), ("COB", 0), ("GO", 4)],
+                False,
+                False,
+            )
+        )
+        # RC 16 (POSTING の GO が 16) は失敗
+        self.assertFalse(
+            is_success(
+                "LEDGER",
+                16,
+                [
+                    ("EXEC", 0),
+                    ("COB", 0),
+                    ("GO", 0),
+                    ("SORT", 0),
+                    ("COB", 0),
+                    ("GO", 16),
+                ],
+                False,
+                False,
+            )
+        )
 
     def test_is_success_ledgmon(self):
-        # 月次締め実行正常 (RC 0)
+        # 月次締め実行正常 (RC 0: MONSEL(COB/GO), SORT, ACCTLDG(COB/GO), COMMIT, ONLINE)
         self.assertTrue(
             is_success(
                 "LEDGMON",
                 0,
-                [("COB", 0), ("GO", 0), ("SORT", 0), ("ACCTLDG", 0), ("ONLINE", 0)],
+                [
+                    ("COB", 0),
+                    ("GO", 0),
+                    ("SORT", 0),
+                    ("COB", 0),
+                    ("GO", 0),
+                    ("CHIST", 0),
+                    ("CMONBAL", 0),
+                    ("CBIZDATE", 0),
+                    ("ONLINE", 0),
+                ],
                 False,
                 False,
             )
@@ -54,16 +103,24 @@ class TestJobMetrics(unittest.TestCase):
                 False,
             )
         )
-        # 別のステップでの RC 4 は失敗
+        # ACCTLDG の GO が RC 4 を返した場合（回帰テスト: ステップ名 GO だけに依存していないことの確認）
         self.assertFalse(
             is_success(
                 "LEDGMON",
                 4,
-                [("COB", 0), ("GO", 0), ("SORT", 4), ("ONLINE", 0)],
+                [
+                    ("COB", 0),
+                    ("GO", 0),
+                    ("SORT", 0),
+                    ("COB", 0),
+                    ("GO", 4),
+                    ("ONLINE", 0),
+                ],
                 False,
                 False,
             )
         )
+        # MONSEL の COB が RC 4 を返した場合
         self.assertFalse(
             is_success(
                 "LEDGMON",
@@ -78,7 +135,14 @@ class TestJobMetrics(unittest.TestCase):
             is_success(
                 "LEDGMON",
                 16,
-                [("COB", 0), ("GO", 0), ("ACCTLDG", 16)],
+                [
+                    ("COB", 0),
+                    ("GO", 0),
+                    ("SORT", 0),
+                    ("COB", 0),
+                    ("GO", 16),
+                    ("ONLINE", 0),
+                ],
                 False,
                 False,
             )
@@ -119,7 +183,8 @@ JOB 1000 $HASP395 LEDGER   ENDED
 JOB 1001 $HASP100 LEDGER   ON INTRDR
 JOB 1001 $HASP373 LEDGER   STARTED - INIT 1 - CLASS A - SYS NUA
 JOB 1001 IEFACTRT EXEC     /00:00:01/000000/000000/0/LEDGER
-JOB 1001 IEFACTRT TRANGEN  /00:00:01/000000/000000/4/LEDGER
+JOB 1001 IEFACTRT COB      /00:00:01/000000/000000/0/LEDGER
+JOB 1001 IEFACTRT GO       /00:00:01/000000/000000/4/LEDGER
 JOB 1001 $HASP395 LEDGER   ENDED
 """
         jobs = {}
@@ -153,7 +218,11 @@ JOB 2001 $HASP373 LEDGMON  STARTED - INIT 1 - CLASS A - SYS NUA
 JOB 2001 IEFACTRT COB      /00:00:01/000000/000000/0/LEDGMON
 JOB 2001 IEFACTRT GO       /00:00:01/000000/000000/0/LEDGMON
 JOB 2001 IEFACTRT SORT     /00:00:01/000000/000000/0/LEDGMON
-JOB 2001 IEFACTRT ACCTLDG  /00:00:01/000000/000000/0/LEDGMON
+JOB 2001 IEFACTRT COB      /00:00:01/000000/000000/0/LEDGMON
+JOB 2001 IEFACTRT GO       /00:00:01/000000/000000/0/LEDGMON
+JOB 2001 IEFACTRT CHIST    /00:00:01/000000/000000/0/LEDGMON
+JOB 2001 IEFACTRT CMONBAL  /00:00:01/000000/000000/0/LEDGMON
+JOB 2001 IEFACTRT CBIZDATE /00:00:01/000000/000000/0/LEDGMON
 JOB 2001 IEFACTRT ONLINE   /00:00:01/000000/000000/0/LEDGMON
 JOB 2001 $HASP395 LEDGMON  ENDED
 """
@@ -179,10 +248,34 @@ JOB 2002 $HASP395 LEDGMON  ENDED
         self.assertEqual(jobs["LEDGMON"]["last_rc"], ABEND_OR_JCL_ERROR_RC)
         self.assertNotIn("last_success_timestamp_seconds", jobs["LEDGMON"])
 
+    def test_parse_log_ledgmon_acctldg_rc4_failure(self):
+        # ACCTLDG の GO が RC 4 を返し、後続確定がスキップされ ONLINE が RC 0 で終わるケース
+        # MONSEL の正常スキップと混同せず、9999 で失敗と判定されること
+        log_ledgmon_acctldg_rc4 = """
+JOB 2002 $HASP100 LEDGMON  ON INTRDR
+JOB 2002 $HASP373 LEDGMON  STARTED - INIT 1 - CLASS A - SYS NUA
+JOB 2002 IEFACTRT COB      /00:00:01/000000/000000/0/LEDGMON
+JOB 2002 IEFACTRT GO       /00:00:01/000000/000000/0/LEDGMON
+JOB 2002 IEFACTRT SORT     /00:00:01/000000/000000/0/LEDGMON
+JOB 2002 IEFACTRT COB      /00:00:01/000000/000000/0/LEDGMON
+JOB 2002 IEFACTRT GO       /00:00:01/000000/000000/4/LEDGMON
+JOB 2002 IEFACTRT ONLINE   /00:00:01/000000/000000/0/LEDGMON
+JOB 2002 $HASP395 LEDGMON  ENDED
+"""
+        jobs = {}
+        now = 1700000000
+        parse_log(log_ledgmon_acctldg_rc4, jobs, now)
+        self.assertEqual(jobs["LEDGMON"]["last_rc"], ABEND_OR_JCL_ERROR_RC)
+        self.assertNotIn("last_success_timestamp_seconds", jobs["LEDGMON"])
+
     def test_parse_log_ledgmon_rc16_failure(self):
+        # ACCTLDG の GO が RC 16 を返し、ONLINE が RC 0 で終わるケース
         log_ledgmon_rc16 = """
 JOB 2003 $HASP100 LEDGMON  ON INTRDR
 JOB 2003 $HASP373 LEDGMON  STARTED - INIT 1 - CLASS A - SYS NUA
+JOB 2003 IEFACTRT COB      /00:00:01/000000/000000/0/LEDGMON
+JOB 2003 IEFACTRT GO       /00:00:01/000000/000000/0/LEDGMON
+JOB 2003 IEFACTRT SORT     /00:00:01/000000/000000/0/LEDGMON
 JOB 2003 IEFACTRT COB      /00:00:01/000000/000000/0/LEDGMON
 JOB 2003 IEFACTRT GO       /00:00:01/000000/000000/16/LEDGMON
 JOB 2003 IEFACTRT ONLINE   /00:00:01/000000/000000/0/LEDGMON
